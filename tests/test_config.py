@@ -1,0 +1,63 @@
+from pathlib import Path
+
+import pytest
+
+from infiltrator.config import load_settings
+
+
+def _toml(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(body)
+    return path
+
+
+def test_toml_supplies_paths(tmp_path):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\n',
+    )
+    s = load_settings(env={}, config_file=cfg)
+    assert s.drop_dir == Path("/d")
+    assert s.shelf_size == 8
+
+
+def test_env_overrides_toml(tmp_path):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\nshelf_size = 6\n',
+    )
+    s = load_settings(
+        env={"INFILTRATOR_DROP_DIR": "/elsewhere", "INFILTRATOR_SHELF_SIZE": "10"},
+        config_file=cfg,
+    )
+    assert s.drop_dir == Path("/elsewhere")
+    assert s.shelf_size == 10
+
+
+@pytest.mark.parametrize("size", [5, 11])
+def test_shelf_size_outside_6_to_10_raises(tmp_path, size):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nshelf_size = {size}\n',
+    )
+    with pytest.raises(ValueError):
+        load_settings(env={}, config_file=cfg)
+
+
+def test_missing_required_path_raises(tmp_path):
+    cfg = _toml(tmp_path, 'drop_dir = "/d"\n')
+    with pytest.raises(ValueError, match="library_dir"):
+        load_settings(env={}, config_file=cfg)
+
+
+def test_tilde_is_expanded(tmp_path):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "~/drop"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\n',
+    )
+    s = load_settings(env={}, config_file=cfg)
+    assert s.drop_dir == Path.home() / "drop"

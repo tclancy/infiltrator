@@ -1,0 +1,40 @@
+[project]
+name = "infiltrator"
+version = "0.1.0"
+description = "Turns a pile of arcade files into a small, verified, rotating shelf of games."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.5.0",
+    "py7zr>=0.22",
+    "typer>=0.12",
+]
+
+[project.scripts]
+infiltrator = "infiltrator.cli:app"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=3.7",
+    "pytest>=8.2",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infiltrator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
