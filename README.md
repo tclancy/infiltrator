@@ -35,10 +35,11 @@ shelf_size = 8                          # 6 to 10
 shelf_dir = "/mnt/samsungusb/games/romm/library/roms/arcade"  # holds only the shelf
 bios_dir = "/mnt/samsungusb/games/romm/library/bios/arcade"
 romm_url = "http://localhost:7767"
+romm_token_file = "~/.config/infiltrator/romm-token"   # chmod 600
 ```
 
-The RomM token is a secret, so it is read only from `INFILTRATOR_ROMM_TOKEN`, never from
-the file. Make one in RomM under Settings → Client API Tokens with "View platforms" and
+The RomM token is a secret, so it never goes in this file: it is read from
+`romm_token_file`, or from `INFILTRATOR_ROMM_TOKEN`, which wins. Make one in RomM under Settings → Client API Tokens with "View platforms" and
 "Run tasks".
 
 - **`dat_path`** is the MAME 2003-Plus game list from the

@@ -9,7 +9,7 @@ from pathlib import Path
 DEFAULT_CONFIG = Path("~/.config/infiltrator/config.toml").expanduser()
 PATH_KEYS = ("drop_dir", "library_dir", "db_path", "dat_path", "metadata_dir")
 OPTIONAL_PATH_KEYS = ("shelf_dir", "bios_dir")
-TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: read from the environment, never the TOML
+TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: the environment or romm_token_file, never the TOML
 SHELF_MIN, SHELF_MAX = 6, 10
 
 
@@ -51,6 +51,18 @@ def _shelf_size(value) -> int:
     return size
 
 
+def _romm_token(merged: dict, env: Mapping[str, str]) -> str | None:
+    if env.get(TOKEN_ENV):
+        return env[TOKEN_ENV]
+    path = merged.get("romm_token_file")
+    if not path:
+        return None
+    try:
+        return Path(str(path)).expanduser().read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
 def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None = None) -> Settings:
     merged = _merge_env(_read_toml(config_file), env)
     missing = [k for k in PATH_KEYS if k not in merged]
@@ -64,5 +76,5 @@ def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None 
         **optional,
         shelf_size=_shelf_size(merged.get("shelf_size", 8)),
         romm_url=str(url).rstrip("/") if url else None,
-        romm_token=env.get(TOKEN_ENV) or None,
+        romm_token=_romm_token(merged, env),
     )

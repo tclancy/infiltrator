@@ -86,3 +86,28 @@ def test_romm_settings_from_toml_and_token_from_env_only(tmp_path):
     assert s.romm_url == "http://romm:8080"
     assert s.romm_token == "rmm_x"
     assert load_settings(env={}, config_file=cfg).romm_token is None
+
+
+def test_romm_token_can_come_from_a_file(tmp_path):
+    secret = tmp_path / "token"
+    secret.write_text("rmm_from_file\n")
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nromm_token_file = "{secret}"\n',
+    )
+    assert load_settings(env={}, config_file=cfg).romm_token == "rmm_from_file"
+    env = {"INFILTRATOR_ROMM_TOKEN": "rmm_env"}
+    assert load_settings(env=env, config_file=cfg).romm_token == "rmm_env"
+
+
+def test_missing_or_empty_token_file_means_no_token(tmp_path):
+    empty = tmp_path / "empty"
+    empty.write_text("")
+    for path in (tmp_path / "absent", empty):
+        cfg = _toml(
+            tmp_path,
+            'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+            f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nromm_token_file = "{path}"\n',
+        )
+        assert load_settings(env={}, config_file=cfg).romm_token is None
