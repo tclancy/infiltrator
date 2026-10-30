@@ -51,6 +51,15 @@ def _shelf_size(value) -> int:
     return size
 
 
+def _check_romm_folders(optional: dict[str, Path]) -> None:
+    """Each folder's publish would undo the other's if they were one folder or nested."""
+    shelf, bios = optional.get("shelf_dir"), optional.get("bios_dir")
+    if (shelf is None) != (bios is None):
+        raise ValueError("set both shelf_dir and bios_dir, or neither")
+    if shelf is not None and (shelf.is_relative_to(bios) or bios.is_relative_to(shelf)):
+        raise ValueError("shelf_dir and bios_dir must be separate folders")
+
+
 def _romm_token(merged: dict, env: Mapping[str, str]) -> str | None:
     if env.get(TOKEN_ENV):
         return env[TOKEN_ENV]
@@ -70,6 +79,7 @@ def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None 
         raise ValueError(f"missing setting(s): {', '.join(missing)}")
     paths = {k: Path(str(merged[k])).expanduser() for k in PATH_KEYS}
     optional = {k: Path(str(merged[k])).expanduser() for k in OPTIONAL_PATH_KEYS if k in merged}
+    _check_romm_folders(optional)
     url = merged.get("romm_url")
     return Settings(
         **paths,

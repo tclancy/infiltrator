@@ -10,15 +10,23 @@ from infiltrator.config import Settings
 from infiltrator.dat import load_dat
 from infiltrator.personas import Persona, save_persona
 from infiltrator.shelf import build_shelf
-from infiltrator.tv import bios_needed, show_on_tv
+from infiltrator.tv import bios_needed, publish_tv, tell_romm
 
 
 class Spy:
-    def __init__(self):
-        self.refreshed = []
+    def __init__(self, fail=False):
+        self.refreshed, self.fail = [], fail
 
     def refresh_platform(self, slug):
+        if self.fail:
+            raise OSError("RomM is down")
         self.refreshed.append(slug)
+
+
+def show_on_tv(settings, dat, conn, client):
+    result = publish_tv(settings, dat, conn)
+    tell_romm(settings, conn, client)
+    return result
 
 
 @pytest.fixture
@@ -72,6 +80,18 @@ def test_publishes_the_tv_shelf_with_its_bios_and_tells_romm_once(world):
     show_on_tv(settings, dat, conn, spy)
     assert sorted(p.name for p in settings.shelf_dir.iterdir()) == ["alpha.zip", "beta.zip"]
     assert [p.name for p in settings.bios_dir.iterdir()] == ["biosx.zip"]
+    assert spy.refreshed == ["arcade"]
+    show_on_tv(settings, dat, conn, spy)
+    assert spy.refreshed == ["arcade"]
+
+
+def test_a_failed_romm_call_is_retried_by_the_next_run(world):
+    settings, dat, conn = world
+    set_tv_persona(conn, "tom")
+    with pytest.raises(OSError):
+        show_on_tv(settings, dat, conn, Spy(fail=True))
+    spy = Spy()
+    show_on_tv(settings, dat, conn, spy)
     assert spy.refreshed == ["arcade"]
     show_on_tv(settings, dat, conn, spy)
     assert spy.refreshed == ["arcade"]

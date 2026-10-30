@@ -1,6 +1,8 @@
 """infiltrator: point it at a pile of arcade files, get a shelf of games."""
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Annotated
 
 import click
@@ -27,7 +29,7 @@ from infiltrator.personas import (
 from infiltrator.safety import DropFolderBusy
 from infiltrator.shelf import build_shelf, current_shelf, fill_shelf, rotate
 from infiltrator.sieve import run_sieve
-from infiltrator.tv import show_on_tv
+from infiltrator.tv import preflight, publish_tv, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
 persona_app = typer.Typer(help="Who's playing.", no_args_is_help=True)
@@ -68,19 +70,38 @@ def _give_up(err: Exception, verbose: bool, code: int = 1) -> typer.Exit:
     return typer.Exit(code)
 
 
-def _refresh_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection, verbose: bool) -> None:
+@contextmanager
+def _or_try_again_later(verbose: bool) -> Iterator[None]:
     try:
-        show_on_tv(settings, dat, conn)
+        yield
+    except typer.Exit:
+        raise
     except Exception as err:
         raise _give_up(err, verbose) from err
 
 
-def _top_up_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection, verbose: bool) -> None:
-    """New games go straight into any empty slots on the TV's shelf."""
+def _sync_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> None:
+    """Fill the TV shelf's empty slots, publish it, and tell RomM anything it missed.
+
+    Every sieve runs this, new games or not, so a publish or a RomM call that
+    failed last time is retried until the TV matches the shelf.
+    """
     persona = tv_persona(conn)
-    if persona is not None:
-        fill_shelf(conn, load_persona(conn, persona), settings.shelf_size)
-        _refresh_tv(settings, dat, conn, verbose)
+    if persona is None:
+        return
+    fill_shelf(conn, load_persona(conn, persona), settings.shelf_size)
+    publish_tv(settings, dat, conn)
+    tell_romm(settings, conn)
+
+
+def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: bool) -> None:
+    """At a shell, the change is made already; RomM catching up is the sieve timer's job."""
+    try:
+        tell_romm(settings, conn)
+    except Exception as err:
+        typer.echo("The TV will catch up shortly.")
+        if verbose:
+            typer.echo(f"  ({type(err).__name__}: {err})")
 
 
 def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
@@ -129,8 +150,8 @@ def sieve(verbose: Verbose = False) -> None:
             typer.echo(f"  bios {name}")
         for name in report.blocked:
             typer.echo(f"  not overwritten: {name}.zip is in the library but isn't this set")
-    if report.new_games:
-        _top_up_tv(settings, dat, conn, verbose)
+    with _or_try_again_later(verbose):
+        _sync_tv(settings, dat, conn)
 
 
 @app.command()
@@ -193,15 +214,27 @@ def play(persona: str, verbose: Verbose = False) -> None:
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    set_tv_persona(conn, persona)
-    fill_shelf(conn, who, settings.shelf_size)
-    _refresh_tv(settings, load_dat(settings.dat_path), conn, verbose)
+    with _or_try_again_later(verbose):
+        dat = load_dat(settings.dat_path)
+        preflight(settings)
+        set_tv_persona(conn, persona)
+        fill_shelf(conn, who, settings.shelf_size)
+        publish_tv(settings, dat, conn)
+    _tell_romm_or_shrug(settings, conn, verbose)
     shelf_show(persona)
 
 
-def _refresh_if_on_tv(settings: Settings, conn: sqlite3.Connection, persona: str) -> None:
-    if tv_persona(conn) == persona:
-        _refresh_tv(settings, load_dat(settings.dat_path), conn, verbose=False)
+@contextmanager
+def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) -> Iterator[None]:
+    """Around a shelf change: refuse before it if the TV can't follow, publish after it."""
+    on_tv = tv_persona(conn) == persona
+    with _or_try_again_later(verbose=False):
+        dat = load_dat(settings.dat_path) if on_tv else None
+        if on_tv:
+            preflight(settings)
+        yield
+        if on_tv:
+            publish_tv(settings, dat, conn)
 
 
 @shelf_app.command("show")
@@ -219,8 +252,10 @@ def shelf_show(persona: str) -> None:
 def shelf_build(persona: str) -> None:
     settings = _settings()
     conn = _db(settings)
-    build_shelf(conn, _persona(conn, persona), settings.shelf_size)
-    _refresh_if_on_tv(settings, conn, persona)
+    who = _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        build_shelf(conn, who, settings.shelf_size)
+    _tell_romm_or_shrug(settings, conn, verbose=False)
     shelf_show(persona)
 
 
@@ -229,9 +264,9 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     """Swap the longest-shelved games for fresh ones."""
     settings = _settings()
     conn = _db(settings)
-    out, incoming = rotate(conn, _persona(conn, persona), settings.shelf_size, count)
-    if incoming:
-        _refresh_if_on_tv(settings, conn, persona)
+    who = _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        out, incoming = rotate(conn, who, settings.shelf_size, count)
     if not incoming:
         typer.echo("Nothing new to rotate in.")
     titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
@@ -239,6 +274,7 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
         typer.echo(f"Out: {titles.get(name, name)}")
     for name in incoming:
         typer.echo(f"In: {titles.get(name, name)}")
+    _tell_romm_or_shrug(settings, conn, verbose=False)
 
 
 def _set_for_title(conn: sqlite3.Connection, game_title: str) -> str | None:

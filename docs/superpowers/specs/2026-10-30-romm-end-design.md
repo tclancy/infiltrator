@@ -58,6 +58,8 @@ The RomM watcher (#647) notices new files and quick-scans after 5 minutes, but a
 2. `POST /api/tasks/scan` with `{"type": "quick", "platforms": [id]}`, then poll `GET /api/tasks/{task_id}` until it is `finished` (or `failed`, which is an error).
 3. `POST /api/tasks/run/cleanup_missing_roms` with `{"platform_ids": [id]}`: purges rotated-out games, arcade only.
 
+A change sets a "RomM pending" flag that clears only when step 3 succeeds. Every sieve (the 10-minute timer included) tops up, publishes and retries a pending RomM call, so an outage heals itself. At a shell, a RomM failure prints "The TV will catch up shortly." and exits 0: the shelf change is made, and repeating the command would rotate twice. `play`, `shelf build` and `shelf rotate` check RomM's folders for strangers *before* changing the shelf, so "Try again later!" from them means nothing changed. A file lock keeps the sieve service and a shell from publishing at once.
+
 Auth is a RomM client token (`rmm_…`, scopes `platforms.read` and `tasks.run`) in `INFILTRATOR_ROMM_TOKEN`; the URL is `romm_url` in config. With no token, publish still happens and RomM catches up on adds by itself; removals linger as "missing" until a token is set. Verified against RomM 5.4.1 source (`backend/endpoints/tasks.py`, `backend/tasks/manual/cleanup_missing_roms.py`).
 
 ### Running on its own (homelab)

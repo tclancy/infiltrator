@@ -75,7 +75,8 @@ its shelf is hardlinked into `shelf_dir` (and the BIOS sets it needs into `bios_
 nothing else is left there. `shelf build` and `shelf rotate` for that persona change the TV
 too, and a sieve that finds new games drops them into any empty shelf slots. Nothing already
 on the shelf is ever bumped by a new arrival. With `romm_url` and the token set, RomM is told
-to rescan and to forget games that left. If `shelf_dir` holds a file Infiltrator didn't put
+to rescan and to forget games that left; if RomM doesn't answer, you'll see
+`The TV will catch up shortly.` and the next sieve tries again. If `shelf_dir` holds a file Infiltrator didn't put
 there, it changes nothing and says `Try again later!`; move that file into the drop folder.
 
 **What the sieve does to the drop folder.** It deletes:

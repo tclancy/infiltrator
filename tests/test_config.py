@@ -111,3 +111,21 @@ def test_missing_or_empty_token_file_means_no_token(tmp_path):
             f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nromm_token_file = "{path}"\n',
         )
         assert load_settings(env={}, config_file=cfg).romm_token is None
+
+
+@pytest.mark.parametrize(
+    "folders",
+    [
+        'shelf_dir = "/r/arcade"\nbios_dir = "/r/arcade"\n',
+        'shelf_dir = "/r/arcade"\nbios_dir = "/r/arcade/bios"\n',
+        'shelf_dir = "/r/arcade"\n',
+    ],
+)
+def test_romm_folders_must_be_two_separate_folders(tmp_path, folders):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\n' + folders,
+    )
+    with pytest.raises(ValueError):
+        load_settings(env={}, config_file=cfg)

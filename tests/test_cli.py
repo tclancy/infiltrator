@@ -225,3 +225,64 @@ def test_a_stranger_in_romms_folder_is_try_again_later(home, tv):
     assert result.exit_code == 1
     assert result.output.strip().endswith("Try again later!")
     assert on_tv(shelf) == ["hbarrelw"]
+
+
+def test_a_failed_rotate_changes_nothing_so_a_retry_rotates_once(home, tv):
+    shelf, _ = tv
+    stock_drop(home, "alpha", "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    before = conn.execute("SELECT COUNT(*) FROM shelf_history").fetchone()[0]
+    (shelf / "hbarrelw.zip").write_bytes(b"hand placed")
+    result = run("shelf", "rotate", "tom")
+    assert result.exit_code == 1 and result.output.strip() == "Try again later!"
+    assert conn.execute("SELECT COUNT(*) FROM shelf_history").fetchone()[0] == before
+
+
+def test_play_with_a_broken_setup_is_try_again_later_and_keeps_the_old_tv(home, tv, tmp_path):
+    shelf, _ = tv
+    stock_drop(home, "alpha")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("persona", "add", "kids", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    (tmp_path / "dat.xml").unlink()
+    result = run("play", "kids")
+    assert result.exit_code == 1 and result.output.strip() == "Try again later!"
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.tv import tv_persona
+    from infiltrator.config import load_settings
+
+    assert tv_persona(connect(load_settings().db_path)) == "tom"
+
+
+def test_the_next_sieve_finishes_a_publish_that_failed(home, tv):
+    shelf, _ = tv
+    stock_drop(home, "alpha")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    (shelf / "stranger.zip").write_bytes(b"x")
+    make_zip(home / "delta.zip", chips_for("delta"))
+    assert run("sieve").exit_code == 1
+    (shelf / "stranger.zip").unlink()
+    assert run("sieve").exit_code == 0
+    assert on_tv(shelf) == ["alpha", "delta"]
+
+
+def test_romm_down_at_a_shell_is_not_an_error(home, tv, monkeypatch):
+    shelf, _ = tv
+    stock_drop(home, "alpha")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+
+    class Down:
+        def refresh_platform(self, slug):
+            raise OSError("RomM is down")
+
+    monkeypatch.setattr("infiltrator.tv.romm_client", lambda settings: Down())
+    result = run("play", "tom")
+    assert result.exit_code == 0
+    assert "The TV will catch up shortly." in result.output
+    assert on_tv(shelf) == ["alpha"]

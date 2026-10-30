@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -30,7 +31,7 @@ def test_links_the_shelf_and_its_bios(tree):
     assert names(bios) == ["biosx.zip"]
     assert same_file(shelf / "alpha.zip", library / "alpha.zip")
     assert same_file(bios / "biosx.zip", library / "biosx.zip")
-    assert result.added == ["alpha", "beta", "biosx"] and result.removed == []
+    assert sorted(result.added) == ["alpha", "beta", "biosx"] and result.removed == []
 
 
 def test_unlinks_games_that_left_the_shelf_but_keeps_the_library(tree):
@@ -104,3 +105,48 @@ def test_missing_folder_is_an_error(tree, tmp_path):
     library, _shelf, bios = tree
     with pytest.raises(PublishError):
         publish(library, tmp_path / "absent", bios, ["alpha"], [])
+
+
+def test_bios_and_new_games_go_in_before_old_games_come_out(tree, monkeypatch):
+    library, shelf, bios = tree
+    publish(library, shelf, bios, ["alpha"], [])
+    real_link = os.link
+
+    def flaky(src, dst):
+        if Path(dst).name == "gamma.zip":
+            raise OSError("disk hiccup")
+        real_link(src, dst)
+
+    monkeypatch.setattr("infiltrator.publish.os.link", flaky)
+    with pytest.raises(OSError):
+        publish(library, shelf, bios, ["beta", "gamma"], ["biosx"])
+    assert names(bios) == ["biosx.zip"]
+    assert names(shelf) == ["alpha.zip", "beta.zip"]
+
+
+def test_a_link_someone_else_already_made_is_fine(tree, monkeypatch):
+    library, shelf, bios = tree
+    real_link = os.link
+
+    def racing(src, dst):  # another publisher got there between plan and link
+        real_link(src, dst)
+        raise FileExistsError(dst)
+
+    monkeypatch.setattr("infiltrator.publish.os.link", racing)
+    result = publish(library, shelf, bios, ["alpha"], [])
+    assert names(shelf) == ["alpha.zip"] and result.added == []
+
+
+def test_a_stranger_that_appears_after_the_plan_is_not_deleted(tree, monkeypatch):
+    library, shelf, bios = tree
+    publish(library, shelf, bios, ["alpha"], [])
+    real_link = os.link
+
+    def swap_in_a_stranger(src, dst):
+        real_link(src, dst)
+        (shelf / "alpha.zip").unlink()
+        (shelf / "alpha.zip").write_bytes(b"someone else's")
+
+    monkeypatch.setattr("infiltrator.publish.os.link", swap_in_a_stranger)
+    publish(library, shelf, bios, ["beta"], [])
+    assert (shelf / "alpha.zip").read_bytes() == b"someone else's"
