@@ -8,6 +8,8 @@ from pathlib import Path
 
 DEFAULT_CONFIG = Path("~/.config/infiltrator/config.toml").expanduser()
 PATH_KEYS = ("drop_dir", "library_dir", "db_path", "dat_path", "metadata_dir")
+OPTIONAL_PATH_KEYS = ("shelf_dir", "bios_dir")
+TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: read from the environment, never the TOML
 SHELF_MIN, SHELF_MAX = 6, 10
 
 
@@ -19,6 +21,10 @@ class Settings:
     dat_path: Path
     metadata_dir: Path
     shelf_size: int = 8
+    shelf_dir: Path | None = None  # RomM's roms/arcade: the shelf's games, nothing else
+    bios_dir: Path | None = None  # RomM's bios/arcade
+    romm_url: str | None = None
+    romm_token: str | None = None
 
 
 def _read_toml(config_file: Path | None) -> dict:
@@ -31,7 +37,7 @@ def _read_toml(config_file: Path | None) -> dict:
 
 def _merge_env(raw: dict, env: Mapping[str, str]) -> dict:
     merged = dict(raw)
-    for key in (*PATH_KEYS, "shelf_size"):
+    for key in (*PATH_KEYS, *OPTIONAL_PATH_KEYS, "shelf_size", "romm_url"):
         value = env.get(f"INFILTRATOR_{key.upper()}")
         if value is not None:
             merged[key] = value
@@ -51,4 +57,12 @@ def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None 
     if missing:
         raise ValueError(f"missing setting(s): {', '.join(missing)}")
     paths = {k: Path(str(merged[k])).expanduser() for k in PATH_KEYS}
-    return Settings(**paths, shelf_size=_shelf_size(merged.get("shelf_size", 8)))
+    optional = {k: Path(str(merged[k])).expanduser() for k in OPTIONAL_PATH_KEYS if k in merged}
+    url = merged.get("romm_url")
+    return Settings(
+        **paths,
+        **optional,
+        shelf_size=_shelf_size(merged.get("shelf_size", 8)),
+        romm_url=str(url).rstrip("/") if url else None,
+        romm_token=env.get(TOKEN_ENV) or None,
+    )

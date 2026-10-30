@@ -37,6 +37,10 @@ class DropFolderError(Exception):
     """The drop folder is the wrong place, or it is still being written to."""
 
 
+class DropFolderBusy(DropFolderError):
+    """Something is still being copied or downloaded into the drop folder."""
+
+
 def _regular_files(root: Path) -> Iterator[Path]:
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         for name in filenames:

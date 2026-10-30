@@ -9,7 +9,7 @@ from infiltrator.config import Settings
 from infiltrator.dat import Dat
 from infiltrator.rebuild import ChipPool, library_chips, rebuild
 from infiltrator.safety import (
-    DropFolderError,
+    DropFolderBusy,
     active_download_reasons,
     check_drop,
     inside,
@@ -85,7 +85,7 @@ def run_sieve(
     check_drop(drop, library, settings.db_path)
     reasons = active_download_reasons(drop, settle_seconds, sleep)
     if reasons:
-        raise DropFolderError("; ".join(reasons))
+        raise DropFolderBusy("; ".join(reasons))
 
     try:
         sources = scan(drop, dat)

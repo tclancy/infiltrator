@@ -129,3 +129,16 @@ def rotate(
     wanted += [g["set_name"] for g in incoming]
     _replace_shelf(conn, p.name, wanted, now())
     return [g["set_name"] for g in out], [g["set_name"] for g in incoming]
+
+
+def fill_shelf(
+    conn: sqlite3.Connection, p: Persona, size: int, now: Callable[[], str] = utcnow
+) -> list[str]:
+    """Put the best new games in the empty slots; nothing already shelved moves."""
+    shelf = current_shelf(conn, p.name)
+    taken = {g["family"] for g in shelf}
+    incoming = [g["set_name"] for g in _ranked(conn, p) if g["family"] not in taken]
+    incoming = incoming[: max(size - len(shelf), 0)]
+    if incoming:
+        _replace_shelf(conn, p.name, [g["set_name"] for g in shelf] + incoming, now())
+    return incoming

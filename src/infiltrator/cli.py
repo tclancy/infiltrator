@@ -10,6 +10,7 @@ from infiltrator.catalogue import connect
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
+from infiltrator.catalogue.tv import set_tv_persona, tv_persona
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import Dat, load_dat
 from infiltrator.metadata import load_metadata
@@ -23,8 +24,10 @@ from infiltrator.personas import (
     load_persona,
     save_persona,
 )
-from infiltrator.shelf import build_shelf, current_shelf, rotate
+from infiltrator.safety import DropFolderBusy
+from infiltrator.shelf import build_shelf, current_shelf, fill_shelf, rotate
 from infiltrator.sieve import run_sieve
+from infiltrator.tv import show_on_tv
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
 persona_app = typer.Typer(help="Who's playing.", no_args_is_help=True)
@@ -37,6 +40,7 @@ app.add_typer(issue_app, name="issue")
 app.add_typer(tune_app, name="tune")
 
 TRY_AGAIN = "Try again later!"
+BUSY_EXIT = 75  # EX_TEMPFAIL: still copying in; the service treats it as success
 SETTLE_SECONDS = 5.0  # how long the drop folder must sit still before the sieve trusts it
 INPUT_CHOICES = {1: GAMEPAD, 2: GAMEPAD | SPINNERS, 3: GAMEPAD | SPINNERS | LIGHT_GUN}
 
@@ -54,6 +58,29 @@ def _db(settings: Settings) -> sqlite3.Connection:
 def _sync(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> int:
     meta = load_metadata(settings.metadata_dir, dat)
     return sync_games(conn, settings.library_dir, dat, meta)
+
+
+def _give_up(err: Exception, verbose: bool, code: int = 1) -> typer.Exit:
+    """The person sees one line; --verbose shows why."""
+    typer.echo(TRY_AGAIN)
+    if verbose:
+        typer.echo(f"  ({type(err).__name__}: {err})")
+    return typer.Exit(code)
+
+
+def _refresh_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection, verbose: bool) -> None:
+    try:
+        show_on_tv(settings, dat, conn)
+    except Exception as err:
+        raise _give_up(err, verbose) from err
+
+
+def _top_up_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection, verbose: bool) -> None:
+    """New games go straight into any empty slots on the TV's shelf."""
+    persona = tv_persona(conn)
+    if persona is not None:
+        fill_shelf(conn, load_persona(conn, persona), settings.shelf_size)
+        _refresh_tv(settings, dat, conn, verbose)
 
 
 def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
@@ -81,11 +108,10 @@ def sieve(verbose: Verbose = False) -> None:
             settle_seconds=SETTLE_SECONDS,
             on_library_changed=lambda: _sync(settings, dat, conn),
         )
-    except Exception as err:  # the person sees one line; --verbose shows why
-        typer.echo(TRY_AGAIN)
-        if verbose:
-            typer.echo(f"  ({type(err).__name__}: {err})")
-        raise typer.Exit(1) from err
+    except DropFolderBusy as err:
+        raise _give_up(err, verbose, BUSY_EXIT) from err
+    except Exception as err:
+        raise _give_up(err, verbose) from err
     for game_title, names in _new_titles(dat, report.new_games).items():
         line = f"New: {game_title}"
         typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
@@ -103,6 +129,8 @@ def sieve(verbose: Verbose = False) -> None:
             typer.echo(f"  bios {name}")
         for name in report.blocked:
             typer.echo(f"  not overwritten: {name}.zip is in the library but isn't this set")
+    if report.new_games:
+        _top_up_tv(settings, dat, conn, verbose)
 
 
 @app.command()
@@ -159,6 +187,23 @@ def _persona(conn: sqlite3.Connection, name: str) -> Persona:
         raise typer.Exit(1) from err
 
 
+@app.command()
+def play(persona: str, verbose: Verbose = False) -> None:
+    """Put this persona's shelf on the TV."""
+    settings = _settings()
+    conn = _db(settings)
+    who = _persona(conn, persona)
+    set_tv_persona(conn, persona)
+    fill_shelf(conn, who, settings.shelf_size)
+    _refresh_tv(settings, load_dat(settings.dat_path), conn, verbose)
+    shelf_show(persona)
+
+
+def _refresh_if_on_tv(settings: Settings, conn: sqlite3.Connection, persona: str) -> None:
+    if tv_persona(conn) == persona:
+        _refresh_tv(settings, load_dat(settings.dat_path), conn, verbose=False)
+
+
 @shelf_app.command("show")
 def shelf_show(persona: str) -> None:
     conn = _db(_settings())
@@ -175,6 +220,7 @@ def shelf_build(persona: str) -> None:
     settings = _settings()
     conn = _db(settings)
     build_shelf(conn, _persona(conn, persona), settings.shelf_size)
+    _refresh_if_on_tv(settings, conn, persona)
     shelf_show(persona)
 
 
@@ -184,6 +230,8 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     settings = _settings()
     conn = _db(settings)
     out, incoming = rotate(conn, _persona(conn, persona), settings.shelf_size, count)
+    if incoming:
+        _refresh_if_on_tv(settings, conn, persona)
     if not incoming:
         typer.echo("Nothing new to rotate in.")
     titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}

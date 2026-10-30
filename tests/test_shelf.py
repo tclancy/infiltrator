@@ -5,7 +5,7 @@ from test_personas import add_game
 
 from infiltrator.catalogue import connect
 from infiltrator.personas import Persona, save_persona
-from infiltrator.shelf import build_shelf, current_shelf, rotate
+from infiltrator.shelf import build_shelf, current_shelf, fill_shelf, rotate
 
 
 @pytest.fixture
@@ -127,3 +127,47 @@ def test_history_records_on_and_off_in_utc(conn):
     assert [a["action"] for a in actions].count("on") == 7
     assert [a["action"] for a in actions].count("off") == 1
     assert all(a["at"].endswith("+00:00") for a in actions)
+
+
+def test_fill_on_an_empty_shelf_matches_build(conn):
+    stock(conn, 12)
+    filled = fill_shelf(conn, P(conn, "tom"), 8, now=clock())
+    assert sorted(filled) == shelf_names(conn)
+    assert len(filled) == 8
+
+
+def test_fill_never_displaces_a_shelved_game(conn):
+    add_game(conn, "meh", quality_tier=1)
+    tom = P(conn, "tom")
+    build_shelf(conn, tom, 6, now=clock())
+    stock(conn, 12)
+    fill_shelf(conn, tom, 6, now=clock())
+    shelf = shelf_names(conn)
+    assert "meh" in shelf and len(shelf) == 6
+
+
+def test_fill_takes_the_best_new_game_for_a_free_slot(conn):
+    stock(conn, 5)
+    tom = P(conn, "tom")
+    build_shelf(conn, tom, 6, now=clock())
+    add_game(conn, "worse", quality_tier=1)
+    add_game(conn, "better", quality_tier=9)
+    assert fill_shelf(conn, tom, 6, now=clock()) == ["better"]
+
+
+def test_fill_skips_a_family_already_on_the_shelf(conn):
+    add_game(conn, "puckman", title="PuckMan", family="puckman", quality_tier=9)
+    tom = P(conn, "tom", language=None)
+    build_shelf(conn, tom, 6, now=clock())
+    add_game(conn, "pacman", title="Pac-Man", family="puckman", parent="puckman", quality_tier=9)
+    assert fill_shelf(conn, tom, 6, now=clock()) == []
+
+
+def test_fill_on_a_full_shelf_changes_nothing(conn):
+    stock(conn, 6)
+    tom = P(conn, "tom")
+    build_shelf(conn, tom, 6, now=clock())
+    add_game(conn, "newcomer", quality_tier=9)
+    before = shelf_names(conn)
+    assert fill_shelf(conn, tom, 6, now=clock()) == []
+    assert shelf_names(conn) == before
