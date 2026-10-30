@@ -1,0 +1,20 @@
+# ROMs never enter this repo, real or partial. Test fixtures are generated
+# at test time (size + CRC32 forged to match the DAT), never committed.
+*.rom
+*.zip
+*.7z
+*.chd
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# macOS
+.DS_Store
+._*
