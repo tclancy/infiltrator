@@ -106,3 +106,17 @@ def test_check_drop_accepts_plain_folder(tmp_path):
     drop = tmp_path / "drop"
     drop.mkdir()
     check_drop(drop, tmp_path / "library")
+
+
+def test_check_drop_refuses_db_inside_drop(tmp_path):
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    with pytest.raises(DropFolderError, match="database"):
+        check_drop(drop, tmp_path / "library", drop / "c.db")
+
+
+def test_check_drop_refuses_library_inside_drop_or_drop_inside_library(tmp_path):
+    lib = tmp_path / "lib"
+    (lib / "drop").mkdir(parents=True)
+    with pytest.raises(DropFolderError):
+        check_drop(lib / "drop", lib)

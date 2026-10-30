@@ -87,7 +87,7 @@ def inside(drop: Path, path: Path) -> bool:
     return path.resolve().is_relative_to(drop.resolve())
 
 
-def check_drop(drop: Path, library: Path) -> None:
+def check_drop(drop: Path, library: Path, db_path: Path | None = None) -> None:
     if drop.is_symlink():
         raise DropFolderError(f"drop folder is a symlink: {drop}")
     if not drop.is_dir():
@@ -98,3 +98,5 @@ def check_drop(drop: Path, library: Path) -> None:
     lib = library.resolve()
     if resolved == lib or lib.is_relative_to(resolved) or resolved.is_relative_to(lib):
         raise DropFolderError("drop folder and library overlap")
+    if db_path is not None and db_path.resolve().is_relative_to(resolved):
+        raise DropFolderError("catalogue database is inside the drop folder")
