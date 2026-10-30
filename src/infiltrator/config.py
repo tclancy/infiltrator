@@ -45,9 +45,7 @@ def _shelf_size(value) -> int:
     return size
 
 
-def load_settings(
-    env: Mapping[str, str] = os.environ, config_file: Path | None = None
-) -> Settings:
+def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None = None) -> Settings:
     merged = _merge_env(_read_toml(config_file), env)
     missing = [k for k in PATH_KEYS if k not in merged]
     if missing:
