@@ -1,6 +1,6 @@
 # Infiltrator, part 1: the shelf brain
 
-Status: draft for Tom's review, 2026-10-30. Builder check done; Tom answered its two open questions.
+Status: draft for Tom's review, 2026-10-30. Builder check done; Tom answered its two open questions and approved the calls, then added the catalogue database.
 This is the scope document for part 1. The plan comes after it is approved.
 
 ## Why
@@ -25,7 +25,8 @@ into an existing emulation stack, makes it work, and sneaks back out without any
 
 Infiltrator is several projects, done in this order (approved by Tom):
 
-1. **The shelf brain** (this document). A torrent goes in and a small, clean shelf comes out.
+1. **The shelf brain** (this document). A torrent goes in and a small, clean shelf comes out,
+   all recorded in a game catalogue database.
 2. **The RomM end.** Plug the brain into RomM, so Tom's homelab works this way first.
 3. **Accessibility tags.** Which games someone can play one-handed, button-only, and so on.
 4. **The other end.** A normal person installs one thing on a TV.
@@ -126,6 +127,35 @@ Infiltrator is several projects, done in this order (approved by Tom):
   3. **CI fixtures.** Synthetic files whose size and CRC32 are forged to match DAT entries,
      with junk content inside, generated at test time. CRC32 is trivially forgeable. This only
      works if matching does not also require SHA-1 (unverified; see below).
+
+## The catalogue (Tom, 2026-10-30): built first
+
+A SQLite database of the games that passed the sieve is the foundation, and the first thing
+built. Everything else reads from it or writes to it:
+
+- **Games.** One row per valid set: set name, parent, platform, year, manufacturer, the DAT's
+  description, and where the rebuilt file lives. Persona metadata goes alongside: language,
+  mature flag, genre, players (alternating vs simultaneous), controls and buttons, quality
+  tier, and the first-cut accessibility flags. The sieve writes it, and the persona filter
+  and shelf builder read it.
+- **Shelf and rotation history.** What is on each persona's shelf, and when each game went
+  on or came off. This is what powers the sommelier, which needs to know what was played
+  and rotated out recently.
+- **Issues and crashes.** Room to record "this game crashed / misbehaved on this device", so
+  a problem game can be pulled from shelves. In part 1 this is just the table plus a CLI to
+  log an issue by hand. Automatic capture from RetroArch logs comes later.
+- **Control tuning.** Per-game, and possibly per-device, control settings, e.g. Heavy Barrel's
+  L1/R1 keyboard-device remap and later the controller-feel work. In part 1 this is just the
+  table. It feeds the stretch goal.
+
+**Claude's calls:**
+
+- **The library on disk is the truth for files, and the database is the truth for everything
+  else.** A re-scan rebuilds the games table from disk and the DAT. Human-entered data
+  (shelves, history, issues, tuning) is never regenerated, so it survives a re-scan.
+- **Migrations from day one,** since the database will outlive many versions.
+- **Platform is a column even though part 1 is arcade only,** because Tom wants every system
+  eventually.
 
 ## Where files come in (Tom, 2026-10-30)
 
