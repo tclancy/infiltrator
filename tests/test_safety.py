@@ -6,8 +6,9 @@ from infiltrator.safety import (
     DropFolderError,
     active_download_reasons,
     check_drop,
+    has_executable_extension,
+    has_executable_magic,
     inside,
-    is_executable,
 )
 
 
@@ -37,23 +38,24 @@ def test_quiet_folder_passes(tmp_path):
     assert active_download_reasons(tmp_path, sleep=_no_sleep) == []
 
 
-def test_exe_by_magic_even_when_named_zip(tmp_path):
+def test_exe_magic_detected(tmp_path):
     sneaky = tmp_path / "pacman.zip"
     sneaky.write_bytes(b"MZ\x90\x00rest")
-    assert is_executable(sneaky)
+    assert has_executable_magic(sneaky)
 
 
 @pytest.mark.parametrize("name", ["setup.exe", "run.BAT", "x.ps1", "game.apk"])
 def test_exe_by_extension(tmp_path, name):
     f = tmp_path / name
     f.write_bytes(b"harmless bytes")
-    assert is_executable(f)
+    assert has_executable_extension(f)
 
 
 def test_plain_file_is_not_executable(tmp_path):
     f = tmp_path / "song.mp3"
     f.write_bytes(b"ID3")
-    assert not is_executable(f)
+    assert not has_executable_extension(f)
+    assert not has_executable_magic(f)
 
 
 def test_symlink_to_outside_is_not_inside(tmp_path):

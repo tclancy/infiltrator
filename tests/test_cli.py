@@ -97,3 +97,13 @@ def test_two_versions_of_one_game_print_once(home):
     merged = {**chips_for("alpha"), "ab3.bin": chips_for("alphab")["ab3.bin"]}
     make_zip(home / "alpha.zip", merged)
     assert run("sieve").output.count("New: Alpha Blaster") == 1
+
+
+def test_unexpected_error_is_still_try_again_later(home, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(cli, "run_sieve", boom)
+    result = run("sieve")
+    assert result.exit_code == 1
+    assert result.output.strip() == "Try again later!"

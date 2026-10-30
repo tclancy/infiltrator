@@ -72,9 +72,11 @@ def active_download_reasons(
     return reasons
 
 
-def is_executable(path: Path) -> bool:
-    if path.suffix.lower().lstrip(".") in EXECUTABLE_EXTENSIONS:
-        return True
+def has_executable_extension(path: Path) -> bool:
+    return path.suffix.lower().lstrip(".") in EXECUTABLE_EXTENSIONS
+
+
+def has_executable_magic(path: Path) -> bool:
     with path.open("rb") as f:
         head = f.read(4)
     return head.startswith(EXECUTABLE_MAGIC)

@@ -94,3 +94,11 @@ def test_sieve_end_to_end_populates_games(tmp_path, synthetic_dat):
         on_library_changed=lambda: sync_games(conn, settings.library_dir, dat, {}),
     )
     assert row(conn, "alpha")["title"] == "Alpha Blaster"
+
+
+def test_game_with_missing_bios_not_catalogued(lib):
+    library, dat, conn = lib
+    make_zip(library / "beta.zip", {"b1.bin": chips_for("beta")["b1.bin"]})
+    assert sync_games(conn, library, dat, {}) == 0
+    make_zip(library / "biosx.zip", chips_for("biosx"))
+    assert sync_games(conn, library, dat, {}) == 2

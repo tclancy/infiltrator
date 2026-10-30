@@ -14,7 +14,7 @@ from infiltrator.safety import (
     check_drop,
     inside,
 )
-from infiltrator.scan import Source, is_judged, scan
+from infiltrator.scan import Source, is_judged, scan, stamp_of
 
 
 @dataclass
@@ -23,6 +23,7 @@ class SieveReport:
     new_bios: list[str] = field(default_factory=list)
     deleted: list[Path] = field(default_factory=list)
     left_alone: list[Path] = field(default_factory=list)
+    blocked: list[str] = field(default_factory=list)
 
 
 def _pool(judged: list[Source], library: Path) -> ChipPool:
@@ -35,14 +36,32 @@ def _pool(judged: list[Source], library: Path) -> ChipPool:
     return pool
 
 
-def _delete(drop: Path, sources: list[Source]) -> list[Path]:
-    deleted = []
+def _unchanged(source: Source) -> bool:
+    try:
+        return stamp_of(source.path) == source.stamp
+    except FileNotFoundError:
+        return False
+
+
+def _delete(drop: Path, sources: list[Source]) -> tuple[list[Path], list[Path]]:
+    """Unlink judged sources still exactly as scanned; return (deleted, skipped)."""
+    deleted, skipped = [], []
     for source in sources:
-        if inside(drop, source.path):
+        if inside(drop, source.path) and _unchanged(source):
             source.path.unlink()
             deleted.append(source.path)
+        else:
+            skipped.append(source.path)
     _prune_emptied_dirs(drop, deleted)
-    return deleted
+    return deleted, skipped
+
+
+def _feeds_blocked(source: Source, dat: Dat, blocked: set[str]) -> bool:
+    return any(
+        game.name in blocked
+        for chip in source.chips
+        for game, _rom in dat.lookup(chip.sha1, chip.size, chip.crc)
+    )
 
 
 def _prune_emptied_dirs(drop: Path, deleted: list[Path]) -> None:
@@ -68,17 +87,22 @@ def run_sieve(
     if reasons:
         raise DropFolderError("; ".join(reasons))
 
-    sources = scan(drop, dat)
-    judged = [s for s in sources if is_judged(s, dat)]
-    judged_ids = {id(s) for s in judged}
-    result = rebuild(_pool(judged, library), dat, library)
-
-    report = SieveReport(
-        new_games=[n for n in result.built if not dat.games[n].is_bios],
-        new_bios=[n for n in result.built if dat.games[n].is_bios],
-        left_alone=[s.path for s in sources if id(s) not in judged_ids],
-    )
-    report.deleted = _delete(drop, judged)
-    if on_library_changed is not None:
-        on_library_changed()
-    return report
+    try:
+        sources = scan(drop, dat)
+        judged = [s for s in sources if is_judged(s, dat)]
+        result = rebuild(_pool(judged, library), dat, library)
+        blocked = set(result.blocked)
+        doomed = [s for s in judged if not _feeds_blocked(s, dat, blocked)]
+        doomed_ids = {id(s) for s in doomed}
+        report = SieveReport(
+            new_games=[n for n in result.built if not dat.games[n].is_bios],
+            new_bios=[n for n in result.built if dat.games[n].is_bios],
+            blocked=result.blocked,
+            left_alone=[s.path for s in sources if id(s) not in doomed_ids],
+        )
+        report.deleted, changed = _delete(drop, doomed)
+        report.left_alone += changed
+        return report
+    finally:
+        if on_library_changed is not None:
+            on_library_changed()

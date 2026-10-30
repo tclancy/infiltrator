@@ -22,7 +22,6 @@ from infiltrator.personas import (
     load_persona,
     save_persona,
 )
-from infiltrator.safety import DropFolderError
 from infiltrator.shelf import build_shelf, current_shelf, rotate
 from infiltrator.sieve import run_sieve
 
@@ -79,10 +78,10 @@ def sieve(verbose: Verbose = False) -> None:
             settle_seconds=SETTLE_SECONDS,
             on_library_changed=lambda: _sync(settings, dat, conn),
         )
-    except DropFolderError as err:
+    except Exception as err:  # the person sees one line; --verbose shows why
         typer.echo(TRY_AGAIN)
         if verbose:
-            typer.echo(f"  ({err})")
+            typer.echo(f"  ({type(err).__name__}: {err})")
         raise typer.Exit(1) from err
     for game_title, names in _new_titles(dat, report.new_games).items():
         line = f"New: {game_title}"
@@ -99,6 +98,8 @@ def sieve(verbose: Verbose = False) -> None:
             typer.echo(f"  left alone {path}")
         for name in report.new_bios:
             typer.echo(f"  bios {name}")
+        for name in report.blocked:
+            typer.echo(f"  not overwritten: {name}.zip is in the library but isn't this set")
 
 
 @app.command()

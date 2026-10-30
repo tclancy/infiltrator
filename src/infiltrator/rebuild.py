@@ -15,6 +15,10 @@ from infiltrator.scan import Chip, fingerprint
 class RebuildResult:
     built: list[str] = field(default_factory=list)
     already_present: list[str] = field(default_factory=list)
+    # A library file with this set's name exists but isn't this set (another
+    # core's version, say). It is never overwritten, and the sieve leaves the
+    # sources that could have built it alone.
+    blocked: list[str] = field(default_factory=list)
 
 
 class ChipPool:
@@ -65,24 +69,41 @@ def set_is_valid(path: Path, roms: tuple[Rom, ...]) -> bool:
         return False
 
 
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_set(path: Path, roms: tuple[Rom, ...], pool: ChipPool) -> None:
+    """Write, flush, verify, then atomically move into place; durable before return."""
     tmp = path.with_name(path.name + ".tmp")
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
             for rom in sorted(roms, key=lambda r: r.name):
                 zf.writestr(rom.name, pool.find(rom).read())
+        with tmp.open("rb") as f:
+            os.fsync(f.fileno())
         if not set_is_valid(tmp, roms):
             raise RuntimeError(f"read-back verification failed for {path.name}")
         os.replace(tmp, path)
+        _fsync_dir(path.parent)
     finally:
         tmp.unlink(missing_ok=True)
 
 
-def _buildable(game: Game, dat: Dat, pool: ChipPool, library: Path) -> bool:
-    if game.has_disk:
-        return False
+def bios_ready(game: Game, dat: Dat, library: Path) -> bool:
+    """A game that needs a BIOS only counts if that BIOS is in the library and valid."""
     bios = dat.bios_of(game)
-    if bios is not None and not (library / f"{bios.name}.zip").exists():
+    if bios is None:
+        return True
+    return set_is_valid(library / f"{bios.name}.zip", dat.required_roms(bios))
+
+
+def _buildable(game: Game, dat: Dat, pool: ChipPool, library: Path) -> bool:
+    if game.has_disk or not bios_ready(game, dat, library):
         return False
     return all(pool.find(r) for r in dat.required_roms(game))
 
@@ -96,8 +117,11 @@ def rebuild(pool: ChipPool, dat: Dat, library: Path) -> RebuildResult:
             continue
         roms = dat.required_roms(game)
         target = library / f"{game.name}.zip"
-        if target.exists() and set_is_valid(target, roms):
-            result.already_present.append(game.name)
+        if target.exists() or target.is_symlink():
+            if set_is_valid(target, roms):
+                result.already_present.append(game.name)
+            else:
+                result.blocked.append(game.name)
             continue
         _write_set(target, roms, pool)
         result.built.append(game.name)

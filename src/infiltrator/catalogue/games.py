@@ -7,7 +7,7 @@ from infiltrator.catalogue import utcnow
 from infiltrator.dat import Dat, Game
 from infiltrator.metadata import SetMeta
 from infiltrator.names import title
-from infiltrator.rebuild import set_is_valid
+from infiltrator.rebuild import bios_ready, set_is_valid
 
 COLUMNS = (
     "set_name, parent, family, description, title, year, manufacturer, is_bios, path, "
@@ -20,7 +20,11 @@ def verified_sets(library: Path, dat: Dat) -> list[Game]:
     games = []
     for path in sorted(library.glob("*.zip")):
         game = dat.games.get(path.stem)
-        if game is not None and set_is_valid(path, dat.required_roms(game)):
+        if (
+            game is not None
+            and set_is_valid(path, dat.required_roms(game))
+            and bios_ready(game, dat, library)
+        ):
             games.append(game)
     return games
 

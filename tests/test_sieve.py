@@ -136,10 +136,18 @@ def test_extra_junk_member_dropped_and_source_deleted(env):
 
 def test_executable_deleted_even_if_unrelated_name(env):
     settings, _ = env
-    (settings.drop_dir / "free_games.exe").write_bytes(b"MZ\x90")
-    (settings.drop_dir / "song.mp3").write_bytes(b"MZ\x90")  # magic bytes say exe
+    (settings.drop_dir / "free_games.exe").write_bytes(b"harmless")
+    (settings.drop_dir / "pacman.zip").write_bytes(b"MZ\x90")  # an exe dressed as a zip
+    (settings.drop_dir / "README").write_bytes(b"#!/bin/sh\nrm -rf ~")
     sieve(env)
     assert drop_files(settings) == set()
+
+
+def test_non_arcade_file_with_exe_magic_left_alone(env):
+    settings, _ = env
+    (settings.drop_dir / "game.gb").write_bytes(b"MZ by chance")
+    sieve(env)
+    assert drop_files(settings) == {"game.gb"}
 
 
 def test_unrelated_file_left_alone(env):
@@ -152,19 +160,27 @@ def test_unrelated_file_left_alone(env):
     assert len(report.left_alone) == 2
 
 
-def test_mp3_named_like_set_is_deleted(env):
+def test_mp3_named_like_set_is_left_alone(env):
+    # Unreadable is never judged: a stalled download looks exactly like this.
     settings, _ = env
     (settings.drop_dir / "alpha.zip").write_bytes(b"ID3 this is really an mp3")
     sieve(env)
-    assert drop_files(settings) == set()
+    assert drop_files(settings) == {"alpha.zip"}
 
 
-def test_truncated_zip_is_deleted_without_crash(env):
+def test_stalled_preallocated_download_left_alone(env):
+    settings, _ = env
+    (settings.drop_dir / "alpha.zip").write_bytes(bytes(4096))
+    sieve(env)
+    assert drop_files(settings) == {"alpha.zip"}
+
+
+def test_truncated_zip_left_alone_without_crash(env):
     settings, _ = env
     good = make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     good.write_bytes(good.read_bytes()[:60])
     assert sieve(env).new_games == []
-    assert drop_files(settings) == set()
+    assert drop_files(settings) == {"alpha.zip"}
 
 
 def test_unreadable_zip_not_named_like_set_left_alone(env):
@@ -268,3 +284,89 @@ def test_symlink_never_followed_or_deleted(env, tmp_path):
     sieve(env)
     assert precious.exists()
     assert (settings.drop_dir / "alpha.zip").is_symlink()
+
+
+def test_bios_must_be_valid_not_just_present(env):
+    settings, _ = env
+    make_zip(settings.library_dir / "biosx.zip", {"junk.bin": b"modern mame bios"})
+    make_zip(settings.drop_dir / "beta.zip", {"b1.bin": chips_for("beta")["b1.bin"]})
+    assert sieve(env).new_games == []
+
+
+def test_existing_library_file_is_never_overwritten(env):
+    settings, _ = env
+    other_core = make_zip(settings.library_dir / "alpha.zip", {"a1.bin": b"another core's set"})
+    before = other_core.read_bytes()
+    make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
+    report = sieve(env)
+    assert report.blocked == ["alpha"]
+    assert other_core.read_bytes() == before
+    assert drop_files(settings) == {"alpha.zip"}  # its chips had nowhere to go
+
+
+def test_file_changed_after_scan_is_not_deleted(env, monkeypatch):
+    settings, _ = env
+    source = make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
+    import infiltrator.sieve as sieve_mod
+
+    real_rebuild = sieve_mod.rebuild
+
+    def rebuild_then_touch(*args):
+        result = real_rebuild(*args)
+        with source.open("ab") as f:
+            f.write(b"torrent client wrote more")
+        return result
+
+    monkeypatch.setattr(sieve_mod, "rebuild", rebuild_then_touch)
+    report = sieve(env)
+    assert source.exists()
+    assert source in report.left_alone
+
+
+def test_nested_7z_inside_zip_is_read(env, tmp_path):
+    settings, _ = env
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    for name, data in chips_for("alpha").items():
+        (staging / name).write_bytes(data)
+    inner = tmp_path / "alpha.7z"
+    with py7zr.SevenZipFile(inner, "w") as archive:
+        for name in chips_for("alpha"):
+            archive.write(staging / name, name)
+    make_zip(settings.drop_dir / "alpha.zip", {"alpha.7z": inner.read_bytes(), "readme.txt": b"hi"})
+    assert sieve(env).new_games == ["alpha"]
+    assert drop_files(settings) == set()
+
+
+def test_nested_rar_makes_archive_foreign(env, tmp_path):
+    settings, _ = env
+    make_zip(settings.drop_dir / "bundle.zip", {**chips_for("alpha"), "snes.rar": b"Rar!"})
+    sieve(env)
+    assert drop_files(settings) == {"bundle.zip"}
+
+
+def test_foreign_two_levels_deep_is_left_alone(env, tmp_path):
+    settings, _ = env
+    deep = make_zip(tmp_path / "deep.zip", {"mario.nes": b"NES\x1a"})
+    middle = make_zip(
+        tmp_path / "middle.zip", {**chips_for("delta"), "deep.zip": deep.read_bytes()}
+    )
+    make_zip(settings.drop_dir / "outer.zip", {**chips_for("alpha"), "m.zip": middle.read_bytes()})
+    sieve(env)
+    assert drop_files(settings) == {"outer.zip"}
+
+
+def test_catalogue_syncs_even_when_the_run_fails(env, monkeypatch):
+    settings, _ = env
+    make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
+    synced = []
+
+    def boom(*_args):
+        raise OSError("disk went away")
+
+    import infiltrator.sieve as sieve_mod
+
+    monkeypatch.setattr(sieve_mod, "_delete", boom)
+    with pytest.raises(OSError):
+        sieve(env, on_library_changed=lambda: synced.append(True))
+    assert synced == [True]

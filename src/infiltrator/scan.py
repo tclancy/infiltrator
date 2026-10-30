@@ -1,6 +1,5 @@
 """Walk the drop folder and find every chip the DAT knows about."""
 
-import functools
 import hashlib
 import io
 import os
@@ -15,9 +14,18 @@ from typing import Literal
 import py7zr
 
 from infiltrator.dat import Dat
-from infiltrator.safety import is_executable
+from infiltrator.safety import has_executable_extension, has_executable_magic
 
 ARCHIVE_SUFFIXES = {".zip", ".7z", ".rar"}
+ARCHIVE_ERRORS = (
+    zipfile.BadZipFile,
+    py7zr.exceptions.ArchiveError,
+    py7zr.exceptions.Bad7zFile,
+    py7zr.exceptions.DecompressionBombError,
+    OSError,
+    EOFError,
+    ValueError,
+)
 Kind = Literal["zip", "7z", "loose", "executable", "unreadable", "rar", "symlink"]
 
 
@@ -35,6 +43,12 @@ class Source:
     kind: Kind
     chips: list[Chip] = field(default_factory=list)
     nested_foreign: bool = False  # holds a nested archive with no DAT chips in it
+    stamp: tuple[int, int, int] | None = None  # (size, mtime_ns, inode) when scanned
+
+
+def stamp_of(path: Path) -> tuple[int, int, int]:
+    st = os.lstat(path)
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
 
 
 def fingerprint(data: bytes, read: Callable[[], bytes]) -> Chip:
@@ -56,12 +70,10 @@ def _zip_chips(dat: Dat, opener: Callable[[], zipfile.ZipFile]) -> tuple[list[Ch
         for info in zf.infolist():
             if info.is_dir():
                 continue
-            if info.filename.lower().endswith(".zip"):
-                inner = _nested_zip_chips(dat, opener, info.filename)
-                if inner:
-                    chips.extend(inner)
-                else:
-                    nested_foreign = True
+            if Path(info.filename).suffix.lower() in ARCHIVE_SUFFIXES:
+                inner, foreign = _nested_chips(dat, opener, info.filename)
+                chips.extend(inner)
+                nested_foreign = nested_foreign or foreign or not inner
                 continue
             if info.file_size not in dat.sizes:
                 continue
@@ -79,44 +91,63 @@ def _zip_reader(opener: Callable[[], zipfile.ZipFile], member: str) -> Callable[
     return read
 
 
-def _nested_zip_chips(dat: Dat, outer: Callable[[], zipfile.ZipFile], member: str) -> list[Chip]:
-    def inner_opener() -> zipfile.ZipFile:
+def _nested_chips(
+    dat: Dat, outer: Callable[[], zipfile.ZipFile], member: str
+) -> tuple[list[Chip], bool]:
+    """Chips inside an archive inside a zip, and whether it hides something foreign."""
+
+    def member_bytes() -> bytes:
         with outer() as zf:
-            return zipfile.ZipFile(io.BytesIO(zf.read(member)))
+            return zf.read(member)
 
+    suffix = Path(member).suffix.lower()
     try:
-        chips, _ = _zip_chips(dat, inner_opener)
-    except zipfile.BadZipFile:
-        return []
-    return chips
+        if suffix == ".zip":
+            return _zip_chips(dat, lambda: zipfile.ZipFile(io.BytesIO(member_bytes())))
+        if suffix == ".7z":
+            return _sevenzip_chips(dat, f"{id(outer)}:{member}", member_bytes), False
+    except (*ARCHIVE_ERRORS,):
+        return [], True
+    return [], True  # .rar: can't look inside, so it's foreign
 
 
-@functools.lru_cache(maxsize=1)
-def _sevenzip_members(path: Path) -> dict[str, bytes]:
-    with tempfile.TemporaryDirectory() as tmp, py7zr.SevenZipFile(path) as archive:
-        archive.extractall(path=tmp)
-        root = Path(tmp)
-        return {
-            str(f.relative_to(root)): f.read_bytes()
-            for f in root.rglob("*")
-            if f.is_file() and not f.is_symlink()
-        }
+_SEVENZIP_CACHE: dict[str, dict[str, bytes]] = {}
 
 
-def _sevenzip_chips(dat: Dat, path: Path) -> list[Chip]:
+def _sevenzip_members(key: str, read_archive: Callable[[], bytes | Path]) -> dict[str, bytes]:
+    """Extract a 7z once per run; py7zr has no random-access member read."""
+    if key not in _SEVENZIP_CACHE:
+        if len(_SEVENZIP_CACHE) >= 8:
+            _SEVENZIP_CACHE.pop(next(iter(_SEVENZIP_CACHE)))
+        source = read_archive()
+        archive_file = source if isinstance(source, Path) else io.BytesIO(source)
+        with tempfile.TemporaryDirectory() as tmp, py7zr.SevenZipFile(archive_file) as archive:
+            archive.extractall(path=tmp)
+            root = Path(tmp)
+            _SEVENZIP_CACHE[key] = {
+                str(f.relative_to(root)): f.read_bytes()
+                for f in root.rglob("*")
+                if f.is_file() and not f.is_symlink()
+            }
+    return _SEVENZIP_CACHE[key]
+
+
+def _sevenzip_chips(dat: Dat, key: str, read_archive: Callable[[], bytes | Path]) -> list[Chip]:
     chips = []
-    for name, data in _sevenzip_members(path).items():
+    for name, data in _sevenzip_members(key, read_archive).items():
         if len(data) not in dat.sizes:
             continue
-        chip = fingerprint(data, _sevenzip_reader(path, name))
+        chip = fingerprint(data, _sevenzip_reader(key, read_archive, name))
         if _known(dat, chip):
             chips.append(chip)
     return chips
 
 
-def _sevenzip_reader(path: Path, member: str) -> Callable[[], bytes]:
+def _sevenzip_reader(
+    key: str, read_archive: Callable[[], bytes | Path], member: str
+) -> Callable[[], bytes]:
     def read() -> bytes:
-        return _sevenzip_members(path)[member]
+        return _sevenzip_members(key, read_archive)[member]
 
     return read
 
@@ -128,34 +159,39 @@ def _loose_chip(dat: Dat, path: Path) -> list[Chip]:
     return [chip] if _known(dat, chip) else []
 
 
-def scan_file(dat: Dat, path: Path) -> Source:
+DISGUISES = {"", ".zip", ".7z"}  # where executable magic bytes mean malware, not chance
+
+
+def _scan_file(dat: Dat, path: Path) -> Source:
     if path.is_symlink():
         return Source(path, "symlink")
-    if is_executable(path):
+    if has_executable_extension(path):
         return Source(path, "executable")
     suffix = path.suffix.lower()
+    if suffix in DISGUISES and has_executable_magic(path):
+        return Source(path, "executable")
     try:
         if suffix == ".zip":
             chips, foreign = _zip_chips(dat, lambda: zipfile.ZipFile(path))
             return Source(path, "zip", chips, foreign)
         if suffix == ".7z":
-            return Source(path, "7z", _sevenzip_chips(dat, path))
-    except (
-        zipfile.BadZipFile,
-        py7zr.exceptions.ArchiveError,
-        py7zr.exceptions.Bad7zFile,
-        py7zr.exceptions.DecompressionBombError,
-        OSError,
-        EOFError,
-        ValueError,
-    ):
+            return Source(path, "7z", _sevenzip_chips(dat, str(path), lambda: path))
+    except ARCHIVE_ERRORS:
         return Source(path, "unreadable")
     if suffix == ".rar":
         return Source(path, "rar")
     return Source(path, "loose", _loose_chip(dat, path))
 
 
+def scan_file(dat: Dat, path: Path) -> Source:
+    stamp = None if path.is_symlink() else stamp_of(path)
+    source = _scan_file(dat, path)
+    source.stamp = stamp
+    return source
+
+
 def scan(drop: Path, dat: Dat) -> list[Source]:
+    _SEVENZIP_CACHE.clear()
     sources = []
     for dirpath, _dirnames, filenames in os.walk(drop, followlinks=False):
         for name in sorted(filenames):
@@ -164,14 +200,17 @@ def scan(drop: Path, dat: Dat) -> list[Source]:
 
 
 def is_judged(source: Source, dat: Dat) -> bool:
-    """Arcade-looking: the only things the sieve may rebuild from and delete."""
+    """Arcade-looking: the only things the sieve may rebuild from and delete.
+
+    An unreadable archive is never judged, even when it is named like a set: a
+    stalled, preallocated download looks exactly like that, and deleting it only
+    makes the torrent client fetch it again.
+    """
     if source.kind == "executable":
         return True
-    if source.kind in ("rar", "symlink") or source.nested_foreign:
+    if source.kind in ("rar", "symlink", "unreadable") or source.nested_foreign:
         return False
     named_like_set = (
         source.path.suffix.lower() in ARCHIVE_SUFFIXES and source.path.stem in dat.games
     )
-    if source.kind == "unreadable":
-        return named_like_set
     return named_like_set or bool(source.chips)
