@@ -9,6 +9,7 @@ TABLES = {
     "shelf_history",
     "issues",
     "control_tuning",
+    "tv",
 }
 
 
@@ -19,7 +20,7 @@ def _tables(conn) -> set[str]:
 
 def test_fresh_db_migrates_to_latest(tmp_path):
     conn = connect(tmp_path / "c.db")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert _tables(conn) == TABLES
 
 

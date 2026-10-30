@@ -61,3 +61,71 @@ def test_tilde_is_expanded(tmp_path):
     )
     s = load_settings(env={}, config_file=cfg)
     assert s.drop_dir == Path.home() / "drop"
+
+
+def test_romm_settings_are_optional(tmp_path):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\n',
+    )
+    s = load_settings(env={}, config_file=cfg)
+    assert (s.shelf_dir, s.bios_dir, s.romm_url, s.romm_token) == (None, None, None, None)
+
+
+def test_romm_settings_from_toml_and_token_from_env_only(tmp_path):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\nshelf_dir = "~/shelf"\n'
+        'bios_dir = "/b"\nromm_url = "http://romm:8080/"\nromm_token = "in-toml"\n',
+    )
+    s = load_settings(env={"INFILTRATOR_ROMM_TOKEN": "rmm_x"}, config_file=cfg)
+    assert s.shelf_dir == Path.home() / "shelf"
+    assert s.bios_dir == Path("/b")
+    assert s.romm_url == "http://romm:8080"
+    assert s.romm_token == "rmm_x"
+    assert load_settings(env={}, config_file=cfg).romm_token is None
+
+
+def test_romm_token_can_come_from_a_file(tmp_path):
+    secret = tmp_path / "token"
+    secret.write_text("rmm_from_file\n")
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nromm_token_file = "{secret}"\n',
+    )
+    assert load_settings(env={}, config_file=cfg).romm_token == "rmm_from_file"
+    env = {"INFILTRATOR_ROMM_TOKEN": "rmm_env"}
+    assert load_settings(env=env, config_file=cfg).romm_token == "rmm_env"
+
+
+def test_missing_or_empty_token_file_means_no_token(tmp_path):
+    empty = tmp_path / "empty"
+    empty.write_text("")
+    for path in (tmp_path / "absent", empty):
+        cfg = _toml(
+            tmp_path,
+            'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+            f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nromm_token_file = "{path}"\n',
+        )
+        assert load_settings(env={}, config_file=cfg).romm_token is None
+
+
+@pytest.mark.parametrize(
+    "folders",
+    [
+        'shelf_dir = "/r/arcade"\nbios_dir = "/r/arcade"\n',
+        'shelf_dir = "/r/arcade"\nbios_dir = "/r/arcade/bios"\n',
+        'shelf_dir = "/r/arcade"\n',
+    ],
+)
+def test_romm_folders_must_be_two_separate_folders(tmp_path, folders):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        'dat_path = "/x.xml"\nmetadata_dir = "/m"\n' + folders,
+    )
+    with pytest.raises(ValueError):
+        load_settings(env={}, config_file=cfg)

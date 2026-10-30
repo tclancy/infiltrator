@@ -8,6 +8,8 @@ from pathlib import Path
 
 DEFAULT_CONFIG = Path("~/.config/infiltrator/config.toml").expanduser()
 PATH_KEYS = ("drop_dir", "library_dir", "db_path", "dat_path", "metadata_dir")
+OPTIONAL_PATH_KEYS = ("shelf_dir", "bios_dir")
+TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: the environment or romm_token_file, never the TOML
 SHELF_MIN, SHELF_MAX = 6, 10
 
 
@@ -19,6 +21,10 @@ class Settings:
     dat_path: Path
     metadata_dir: Path
     shelf_size: int = 8
+    shelf_dir: Path | None = None  # RomM's roms/arcade: the shelf's games, nothing else
+    bios_dir: Path | None = None  # RomM's bios/arcade
+    romm_url: str | None = None
+    romm_token: str | None = None
 
 
 def _read_toml(config_file: Path | None) -> dict:
@@ -31,7 +37,7 @@ def _read_toml(config_file: Path | None) -> dict:
 
 def _merge_env(raw: dict, env: Mapping[str, str]) -> dict:
     merged = dict(raw)
-    for key in (*PATH_KEYS, "shelf_size"):
+    for key in (*PATH_KEYS, *OPTIONAL_PATH_KEYS, "shelf_size", "romm_url"):
         value = env.get(f"INFILTRATOR_{key.upper()}")
         if value is not None:
             merged[key] = value
@@ -45,10 +51,40 @@ def _shelf_size(value) -> int:
     return size
 
 
+def _check_romm_folders(optional: dict[str, Path]) -> None:
+    """Each folder's publish would undo the other's if they were one folder or nested."""
+    shelf, bios = optional.get("shelf_dir"), optional.get("bios_dir")
+    if (shelf is None) != (bios is None):
+        raise ValueError("set both shelf_dir and bios_dir, or neither")
+    if shelf is not None and (shelf.is_relative_to(bios) or bios.is_relative_to(shelf)):
+        raise ValueError("shelf_dir and bios_dir must be separate folders")
+
+
+def _romm_token(merged: dict, env: Mapping[str, str]) -> str | None:
+    if env.get(TOKEN_ENV):
+        return env[TOKEN_ENV]
+    path = merged.get("romm_token_file")
+    if not path:
+        return None
+    try:
+        return Path(str(path)).expanduser().read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
 def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None = None) -> Settings:
     merged = _merge_env(_read_toml(config_file), env)
     missing = [k for k in PATH_KEYS if k not in merged]
     if missing:
         raise ValueError(f"missing setting(s): {', '.join(missing)}")
     paths = {k: Path(str(merged[k])).expanduser() for k in PATH_KEYS}
-    return Settings(**paths, shelf_size=_shelf_size(merged.get("shelf_size", 8)))
+    optional = {k: Path(str(merged[k])).expanduser() for k in OPTIONAL_PATH_KEYS if k in merged}
+    _check_romm_folders(optional)
+    url = merged.get("romm_url")
+    return Settings(
+        **paths,
+        **optional,
+        shelf_size=_shelf_size(merged.get("shelf_size", 8)),
+        romm_url=str(url).rstrip("/") if url else None,
+        romm_token=_romm_token(merged, env),
+    )
