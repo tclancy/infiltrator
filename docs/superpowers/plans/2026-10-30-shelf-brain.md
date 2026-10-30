@@ -495,3 +495,58 @@ modify `sieve.py` to call it.
 - [ ] **Step 4:** Tom's manual half, not automated: confirm each game still plays on the TV.
   That only matters once part 2 points RomM at Infiltrator's library; until then it is listed
   in the PR as pending.
+
+---
+
+## Review amendments (2026-10-30)
+
+A plan review against the real DAT found 11 defects. Claude spot-checked them: the `neogeo` BIOS
+chips do all carry `bios=`, and `mario`, `tetris`, `contra` and `galaga` are set names. These
+amendments **override** the tasks above wherever they conflict.
+
+1. **The chip pool includes the library.** Before rebuilding, add every verified member of
+   `library/*.zip` to the pool. Test: the parent lands in run 1 and the split clone in run 2;
+   the clone gets built in run 2.
+2. **BIOS-held roms are found by resolving `merge` through the `romof` chain, not by the
+   `bios=` attribute.**
+   - A rom of game G is *BIOS-held* if following `merge` up the `romof` ancestors ends in a
+     `runnable="no"` set. Those roms are excluded from G's zip.
+   - G needs its BIOS ancestor's zip in the library. Walk the whole `romof` chain, because
+     228 clones reach `neogeo` only through their parent.
+   - **A BIOS set's own required roms:** every rom without `bios=`, plus the rom(s) whose
+     `bios=` equals the `biosset default="yes"` name. If there's no `biosset`, all of them.
+   - Real-DAT test: `neogeo` requires `sp-s2.sp1`, `sfix.sfx`, `mame.sm1` and `mamelo.lo`, and
+     `2020bbh` needs `neogeo`.
+3. **Matching:** by `sha1` when the DAT lists one (all lowercase); otherwise by `(size, crc)`
+   (13 games plus 2 baddumps). The `Dat` index exposes `lookup(sha1, size, crc)`.
+4. **Required roms are de-duplicated by name** (71 games list a rom twice).
+5. **Synthetic DAT fixture:** a clone's shared chip bytes come from the merge target in the
+   parent, so a shared chip has one hash.
+   - Include a renamed merge (`merge` ≠ `name`). The zip member uses the clone's own `name`.
+   - Add a clone of `beta` (it reaches the BIOS via its parent), and a BIOS chip with no
+     `bios=` attribute.
+6. **The stem rule** ("file is named like a set") applies only to `.zip`/`.7z`/`.rar` files
+   and directories. `mario.nes` is left alone.
+7. **An outer archive holding a nested archive with no DAT chips is left alone whole.** It's
+   someone's mixed bundle.
+8. **Hash only files whose size appears in the DAT** (a size prefilter), so a large torrent is
+   cheap.
+9. **`check_drop(drop, library, db_path)`** refuses if drop and library contain each other in
+   either direction, or if `db_path` is under drop.
+10. **A missing `buttons` attribute means 0.** A game with no `control` (351 of them, mostly
+    mahjong) is never eligible.
+11. **The shelf groups by family** (the root of the `cloneof` chain), not by title, because
+    "PuckMan" and "Pac-Man" are one game. Within a family:
+    1. a must-have;
+    2. a clone whose language matches when the parent's doesn't;
+    3. the parent;
+    4. the lowest set name.
+12. **Personas also ask the Inputs question:** "What's plugged in? (1) a joystick/gamepad,
+    (2) also a spinner or trackball, (3) also a light gun." This maps to `controls`.
+    Default (1): `joy2way`, `joy4way`, `joy8way`, `doublejoy*`.
+13. **Renames:** when an old name has a rename entry, prefer the mapped name over an exact
+    match. Drop the mapping if its target is itself a 2003-Plus set name.
+    - The spec's "confirm by description" isn't possible, because the ini files carry no
+      descriptions. Flag this to Tom; that drop rule is the substitute.
+14. **RAR stays unsupported in part 1**, but the CLI reports it ("left alone: N .rar files").
+    Flag this to Tom as a spec deviation.
