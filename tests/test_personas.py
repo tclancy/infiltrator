@@ -97,3 +97,20 @@ def test_round_trip_persona(conn):
     assert load_persona(conn, "tom") == p
     save_persona(conn, Persona("tom"))
     assert load_persona(conn, "tom") == Persona("tom")
+
+
+def test_tuned_game_is_playable_despite_listed_control(conn):
+    from infiltrator.catalogue.tuning import set_tuning
+
+    add_game(conn, "hbarrelw", control="dial", title="Heavy Barrel")
+    assert eligible(conn, Persona("tom")) == []
+    set_tuning(conn, "hbarrelw", "sabrina", 'input_libretro_device_p1 = "3"')
+    assert names(eligible(conn, Persona("tom"))) == ["hbarrelw"]
+
+
+def test_tuning_does_not_override_one_handed(conn):
+    from infiltrator.catalogue.tuning import set_tuning
+
+    add_game(conn, "hbarrelw", control="dial", buttons=2, a11y_one_button=0)
+    set_tuning(conn, "hbarrelw", "sabrina", "remap")
+    assert eligible(conn, Persona("tom", one_handed=True)) == []

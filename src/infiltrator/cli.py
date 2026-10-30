@@ -9,6 +9,7 @@ import typer
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
+from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import Dat, load_dat
 from infiltrator.metadata import load_metadata
@@ -29,9 +30,11 @@ app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_
 persona_app = typer.Typer(help="Who's playing.", no_args_is_help=True)
 shelf_app = typer.Typer(help="What's on the shelf.", no_args_is_help=True)
 issue_app = typer.Typer(help="Note a game that misbehaved.", no_args_is_help=True)
+tune_app = typer.Typer(help="Save what it took to make a game play right.", no_args_is_help=True)
 app.add_typer(persona_app, name="persona")
 app.add_typer(shelf_app, name="shelf")
 app.add_typer(issue_app, name="issue")
+app.add_typer(tune_app, name="tune")
 
 TRY_AGAIN = "Try again later!"
 SETTLE_SECONDS = 5.0  # how long the drop folder must sit still before the sieve trusts it
@@ -225,3 +228,19 @@ def issue_list(verbose: Verbose = False) -> None:
         name = titles.get(row["set_name"], row["set_name"])
         extra = f" [{row['set_name']}]" if verbose else ""
         typer.echo(f"{row['at'][:10]}  {name}{extra} on {row['device']}: {row['note']}")
+
+
+@tune_app.command("set")
+def tune_set(
+    game: str,
+    device: Annotated[str, typer.Option(help="Which TV or box.")],
+    settings: Annotated[str, typer.Option(help="The remap or settings that fixed it.")],
+) -> None:
+    """A tuned game counts as playable on that pad, whatever MAME lists its control as."""
+    conn = _db(_settings())
+    set_name = _set_for_title(conn, game)
+    if set_name is None:
+        typer.echo(f"Couldn't find {game}.")
+        raise typer.Exit(1)
+    set_tuning(conn, set_name, device, settings)
+    typer.echo("Saved.")

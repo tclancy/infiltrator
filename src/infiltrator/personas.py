@@ -5,6 +5,8 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from infiltrator.catalogue.tuning import tuned_sets
+
 GAMEPAD = frozenset({"joy4way", "joy8way", "doublejoy4way", "doublejoy8way", "stick"})
 SPINNERS = frozenset({"dial", "trackball", "paddle"})
 LIGHT_GUN = frozenset({"lightgun"})
@@ -60,9 +62,13 @@ def is_must_have(p: Persona, title: str | None) -> bool:
     return title is not None and title.casefold() in wanted
 
 
-def _playable(p: Persona, game: sqlite3.Row) -> bool:
-    """Controls and the body: no must-have can override these."""
-    if game["control"] not in p.controls:
+def _playable(p: Persona, game: sqlite3.Row, tuned: set[str]) -> bool:
+    """Controls and the body: no must-have can override these.
+
+    A game with saved control tuning counts as playable whatever its listed
+    control: Heavy Barrel is a dial in MAME but plays fine with an L1/R1 remap.
+    """
+    if game["control"] not in p.controls and game["set_name"] not in tuned:
         return False
     return not p.one_handed or bool(game["a11y_one_button"])
 
@@ -83,10 +89,11 @@ def _suitable(p: Persona, game: sqlite3.Row) -> bool:
 
 def eligible(conn: sqlite3.Connection, p: Persona) -> list[sqlite3.Row]:
     games = conn.execute("SELECT * FROM games WHERE is_bios = 0 ORDER BY set_name").fetchall()
+    tuned = tuned_sets(conn)
     return [
         g
         for g in games
-        if _playable(p, g)
+        if _playable(p, g, tuned)
         and _players_ok(p, g["players"])
         and (is_must_have(p, g["title"]) or _suitable(p, g))
     ]

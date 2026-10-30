@@ -107,3 +107,15 @@ def test_unexpected_error_is_still_try_again_later(home, monkeypatch):
     result = run("sieve")
     assert result.exit_code == 1
     assert result.output.strip() == "Try again later!"
+
+
+def test_tune_set_by_title(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    result = run("tune", "set", "Alpha Blaster", "--device", "sabrina", "--settings", "remap")
+    assert result.exit_code == 0, result.output
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.tuning import tuned_sets
+    from infiltrator.config import load_settings
+
+    assert tuned_sets(connect(load_settings().db_path)) == {"alpha"}

@@ -50,6 +50,8 @@ infiltrator shelf build tom       # pick the shelf
 infiltrator shelf show tom
 infiltrator shelf rotate tom      # the sommelier: swap the longest-shelved game for a fresh one
 infiltrator issue log "Heavy Barrel" --device sabrina --note "froze on stage 2"
+infiltrator tune set "Heavy Barrel" --device sabrina --settings 'L1/R1 rotate (keyboard device)'
+                                  # a tuned game counts as gamepad-playable
 infiltrator rescan                # rebuild the game list from the library
 ```
 
