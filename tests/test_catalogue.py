@@ -33,7 +33,8 @@ def test_issue_survives_game_row_deletion(tmp_path):
     conn = connect(tmp_path / "c.db")
     with conn:
         conn.execute(
-            "INSERT INTO games (set_name, is_bios, path, synced_at) VALUES ('x', 0, 'x.zip', 'now')"
+            "INSERT INTO games (set_name, family, is_bios, path, synced_at) "
+            "VALUES ('x', 'x', 0, 'x.zip', 'now')"
         )
     log_issue(conn, "x", "sabrina", "froze on stage 2")
     with conn:

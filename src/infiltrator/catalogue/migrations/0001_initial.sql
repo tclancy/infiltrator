@@ -6,6 +6,7 @@ CREATE TABLE games (
     set_name        TEXT PRIMARY KEY,
     platform        TEXT NOT NULL DEFAULT 'arcade',
     parent          TEXT,
+    family          TEXT NOT NULL,
     description     TEXT,
     title           TEXT,
     year            TEXT,
