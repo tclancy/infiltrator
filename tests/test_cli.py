@@ -91,3 +91,9 @@ def test_issue_log_by_title(home):
     result = run("issue", "log", "alpha blaster", "--device", "sabrina", "--note", "froze")
     assert result.exit_code == 0, result.output
     assert "Alpha Blaster on sabrina: froze" in run("issue", "list").output
+
+
+def test_two_versions_of_one_game_print_once(home):
+    merged = {**chips_for("alpha"), "ab3.bin": chips_for("alphab")["ab3.bin"]}
+    make_zip(home / "alpha.zip", merged)
+    assert run("sieve").output.count("New: Alpha Blaster") == 1

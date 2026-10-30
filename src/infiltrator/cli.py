@@ -54,6 +54,18 @@ def _sync(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> int:
     return sync_games(conn, settings.library_dir, dat, meta)
 
 
+def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
+    """One line per game, not per version: two Heavy Barrels are one new game."""
+    by_family: dict[str, list[str]] = {}
+    for name in set_names:
+        by_family.setdefault(dat.family(dat.games[name]), []).append(name)
+    titles: dict[str, list[str]] = {}
+    for family, names in by_family.items():
+        root = dat.games.get(family) or dat.games[names[0]]
+        titles.setdefault(title(root.description), []).extend(names)
+    return titles
+
+
 @app.command()
 def sieve(verbose: Verbose = False) -> None:
     """Keep the real games from the drop folder; delete the rest."""
@@ -72,9 +84,9 @@ def sieve(verbose: Verbose = False) -> None:
         if verbose:
             typer.echo(f"  ({err})")
         raise typer.Exit(1) from err
-    for name in report.new_games:
-        line = f"New: {title(dat.games[name].description)}"
-        typer.echo(f"{line}  [{name}]" if verbose else line)
+    for game_title, names in _new_titles(dat, report.new_games).items():
+        line = f"New: {game_title}"
+        typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
     if not report.new_games:
         typer.echo("Nothing new.")
     rars = [p for p in report.left_alone if p.suffix.lower() == ".rar"]
