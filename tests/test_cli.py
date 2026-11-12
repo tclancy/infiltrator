@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from conftest import chips_for, make_zip
 from typer.testing import CliRunner
@@ -286,3 +288,84 @@ def test_romm_down_at_a_shell_is_not_an_error(home, tv, monkeypatch):
     assert result.exit_code == 0
     assert "The TV will catch up shortly." in result.output
     assert on_tv(shelf) == ["alpha"]
+
+
+A_MONTH_AGO = 1_760_270_400  # 2025-10-12, long before any test runs
+
+
+def stock_library_long_ago(home, *names):
+    """Sets that were already in the library before today, as at an upgrade."""
+    library = home.parent / "library"
+    for name in names:
+        path = make_zip(library / f"{name}.zip", chips_for(name))
+        os.utime(path, (A_MONTH_AGO, A_MONTH_AGO))
+
+
+def demo_since():
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.tv import demo_since as current
+    from infiltrator.config import load_settings
+
+    return current(connect(load_settings().db_path))
+
+
+def test_play_new_shows_only_todays_arrivals(home, tv):
+    shelf, refreshed = tv
+    stock_library_long_ago(home, "alpha")
+    stock_drop(home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run("play", "tom", "--new")
+    assert result.exit_code == 0, result.output
+    assert on_tv(shelf) == ["delta"]
+    assert refreshed == ["arcade"]
+    assert "Delta" in result.output and "Alpha" not in result.output
+    assert demo_since() is not None
+
+
+def test_play_new_with_nothing_new_changes_nothing(home, tv):
+    shelf, _ = tv
+    stock_library_long_ago(home, "alpha")
+    run("rescan")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("persona", "add", "kids", input="\n\n\n\n\n\n")
+    run("play", "kids")
+    result = run("play", "tom", "--new")
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "Nothing new today for tom."
+    assert on_tv(shelf) == ["alpha"]
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.tv import tv_persona
+    from infiltrator.config import load_settings
+
+    assert tv_persona(connect(load_settings().db_path)) == "kids"
+
+
+def test_a_sieve_during_a_demo_adds_only_new_arrivals(home, tv):
+    shelf, _ = tv
+    stock_drop(home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom", "--new")
+    stock_library_long_ago(home, "alpha")  # an old set turning up in the library
+    assert run("sieve").exit_code == 0
+    assert on_tv(shelf) == ["delta"]
+    stock_drop(home, "alphab")  # a real new arrival joins the demo
+    assert on_tv(shelf) == ["alphab", "delta"]
+
+
+def test_shelf_build_ends_the_demo(home, tv):
+    shelf, _ = tv
+    stock_library_long_ago(home, "alpha")
+    stock_drop(home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom", "--new")
+    run("shelf", "build", "tom")
+    assert demo_since() is None
+    assert on_tv(shelf) == ["alpha", "delta"]
+
+
+def test_a_plain_play_ends_the_demo(home, tv):
+    stock_drop(home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom", "--new")
+    run("play", "tom")
+    assert demo_since() is None

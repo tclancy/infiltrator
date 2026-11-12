@@ -9,10 +9,11 @@ import click
 import typer
 
 from infiltrator.catalogue import connect
+from infiltrator.catalogue.arrivals import arrived_since, start_of_local_day
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
-from infiltrator.catalogue.tv import set_tv_persona, tv_persona
+from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import Dat, load_dat
 from infiltrator.metadata import load_metadata
@@ -27,7 +28,14 @@ from infiltrator.personas import (
     save_persona,
 )
 from infiltrator.safety import DropFolderBusy
-from infiltrator.shelf import build_shelf, current_shelf, fill_shelf, rotate
+from infiltrator.shelf import (
+    build_shelf,
+    current_shelf,
+    demo_shelf,
+    fill_demo_shelf,
+    fill_shelf,
+    rotate,
+)
 from infiltrator.sieve import run_sieve
 from infiltrator.tv import preflight, publish_tv, tell_romm
 
@@ -47,6 +55,7 @@ SETTLE_SECONDS = 5.0  # how long the drop folder must sit still before the sieve
 INPUT_CHOICES = {1: GAMEPAD, 2: GAMEPAD | SPINNERS, 3: GAMEPAD | SPINNERS | LIGHT_GUN}
 
 Verbose = Annotated[bool, typer.Option("--verbose", "-v", help="Show the nerd stuff.")]
+New = Annotated[bool, typer.Option("--new", help="Only the games that arrived today.")]
 
 
 def _settings() -> Settings:
@@ -89,9 +98,18 @@ def _sync_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> None:
     persona = tv_persona(conn)
     if persona is None:
         return
-    fill_shelf(conn, load_persona(conn, persona), settings.shelf_size)
+    _top_up(settings, conn, load_persona(conn, persona))
     publish_tv(settings, dat, conn)
     tell_romm(settings, conn)
+
+
+def _top_up(settings: Settings, conn: sqlite3.Connection, who: Persona) -> None:
+    """Fill the TV shelf's empty slots; during a demo, only with games new since it began."""
+    since = demo_since(conn)
+    if since is None:
+        fill_shelf(conn, who, settings.shelf_size)
+    else:
+        fill_demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since))
 
 
 def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: bool) -> None:
@@ -209,8 +227,11 @@ def _persona(conn: sqlite3.Connection, name: str) -> Persona:
 
 
 @app.command()
-def play(persona: str, verbose: Verbose = False) -> None:
+def play(persona: str, new: New = False, verbose: Verbose = False) -> None:
     """Put this persona's shelf on the TV."""
+    if new:
+        _play_new(persona, verbose)
+        return
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
@@ -219,6 +240,25 @@ def play(persona: str, verbose: Verbose = False) -> None:
         preflight(settings)
         set_tv_persona(conn, persona)
         fill_shelf(conn, who, settings.shelf_size)
+        publish_tv(settings, dat, conn)
+    _tell_romm_or_shrug(settings, conn, verbose)
+    shelf_show(persona)
+
+
+def _play_new(persona: str, verbose: bool) -> None:
+    """Put today's arrivals on the TV as this persona's shelf, until a normal play or build."""
+    settings = _settings()
+    conn = _db(settings)
+    who = _persona(conn, persona)
+    since = start_of_local_day()
+    with _or_try_again_later(verbose):
+        dat = load_dat(settings.dat_path)
+        preflight(settings)
+        if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
+            typer.echo(f"Nothing new today for {persona}.")
+            return
+        set_tv_persona(conn, persona)
+        start_demo(conn, since)
         publish_tv(settings, dat, conn)
     _tell_romm_or_shrug(settings, conn, verbose)
     shelf_show(persona)
@@ -234,6 +274,7 @@ def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) 
             preflight(settings)
         yield
         if on_tv:
+            end_demo(conn)
             publish_tv(settings, dat, conn)
 
 

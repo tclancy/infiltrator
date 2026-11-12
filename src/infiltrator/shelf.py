@@ -39,15 +39,19 @@ def last_shelved(conn: sqlite3.Connection, persona: str) -> dict[str, str]:
     return {r["set_name"]: r["at"] for r in rows}
 
 
-def _ranked(conn: sqlite3.Connection, p: Persona) -> list[sqlite3.Row]:
-    """Best first; among equals, the one off the shelf longest (never shelved first)."""
+def _rank(conn: sqlite3.Connection, p: Persona, rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """One per family, best first; among equals, the one off the shelf longest."""
     seen = last_shelved(conn, p.name)
 
     def rank(g: sqlite3.Row) -> tuple:
         tier = g["quality_tier"]
         return (tier is None, -(tier or 0), seen.get(g["set_name"], ""), g["set_name"])
 
-    return sorted(pick_one_per_family(eligible(conn, p), p), key=rank)
+    return sorted(pick_one_per_family(rows, p), key=rank)
+
+
+def _ranked(conn: sqlite3.Connection, p: Persona) -> list[sqlite3.Row]:
+    return _rank(conn, p, eligible(conn, p))
 
 
 def current_shelf(conn: sqlite3.Connection, persona: str) -> list[sqlite3.Row]:
@@ -131,14 +135,51 @@ def rotate(
     return [g["set_name"] for g in out], [g["set_name"] for g in incoming]
 
 
+def _fill(
+    conn: sqlite3.Connection, p: Persona, size: int, ranked: list[sqlite3.Row], now: str
+) -> list[str]:
+    """Put the best of ranked in the empty slots; nothing already shelved moves."""
+    shelf = current_shelf(conn, p.name)
+    taken = {g["family"] for g in shelf}
+    incoming = [g["set_name"] for g in ranked if g["family"] not in taken]
+    incoming = incoming[: max(size - len(shelf), 0)]
+    if incoming:
+        _replace_shelf(conn, p.name, [g["set_name"] for g in shelf] + incoming, now)
+    return incoming
+
+
 def fill_shelf(
     conn: sqlite3.Connection, p: Persona, size: int, now: Callable[[], str] = utcnow
 ) -> list[str]:
     """Put the best new games in the empty slots; nothing already shelved moves."""
-    shelf = current_shelf(conn, p.name)
-    taken = {g["family"] for g in shelf}
-    incoming = [g["set_name"] for g in _ranked(conn, p) if g["family"] not in taken]
-    incoming = incoming[: max(size - len(shelf), 0)]
-    if incoming:
-        _replace_shelf(conn, p.name, [g["set_name"] for g in shelf] + incoming, now())
-    return incoming
+    return _fill(conn, p, size, _ranked(conn, p), now())
+
+
+def _ranked_arrivals(conn: sqlite3.Connection, p: Persona, arrived: set[str]) -> list[sqlite3.Row]:
+    """Arrivals only, chosen one per family among themselves: a new clone of an old game counts."""
+    return _rank(conn, p, [g for g in eligible(conn, p) if g["set_name"] in arrived])
+
+
+def demo_shelf(
+    conn: sqlite3.Connection,
+    p: Persona,
+    size: int,
+    arrived: set[str],
+    now: Callable[[], str] = utcnow,
+) -> list[str]:
+    """Replace the shelf with the best of these arrivals; with none eligible, change nothing."""
+    wanted = [g["set_name"] for g in _ranked_arrivals(conn, p, arrived)[:size]]
+    if wanted:
+        _replace_shelf(conn, p.name, wanted, now())
+    return wanted
+
+
+def fill_demo_shelf(
+    conn: sqlite3.Connection,
+    p: Persona,
+    size: int,
+    arrived: set[str],
+    now: Callable[[], str] = utcnow,
+) -> list[str]:
+    """Like fill_shelf, but only these arrivals may take an empty slot."""
+    return _fill(conn, p, size, _ranked_arrivals(conn, p, arrived), now())

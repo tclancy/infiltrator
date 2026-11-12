@@ -11,12 +11,29 @@ def tv_persona(conn: sqlite3.Connection) -> str | None:
 
 
 def set_tv_persona(conn: sqlite3.Connection, persona: str) -> None:
+    """Put this persona on the TV with its normal shelf; any demo ends."""
     with conn:
         conn.execute(
             "INSERT INTO tv (id, persona, at) VALUES (1, ?, ?) "
-            "ON CONFLICT (id) DO UPDATE SET persona = excluded.persona, at = excluded.at",
+            "ON CONFLICT (id) DO UPDATE SET persona = excluded.persona, at = excluded.at, "
+            "demo_since = NULL",
             (persona, utcnow()),
         )
+
+
+def demo_since(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT demo_since FROM tv WHERE id = 1").fetchone()
+    return row["demo_since"] if row else None
+
+
+def start_demo(conn: sqlite3.Connection, since: str) -> None:
+    with conn:
+        conn.execute("UPDATE tv SET demo_since = ? WHERE id = 1", (since,))
+
+
+def end_demo(conn: sqlite3.Connection) -> None:
+    with conn:
+        conn.execute("UPDATE tv SET demo_since = NULL WHERE id = 1")
 
 
 def romm_pending(conn: sqlite3.Connection) -> bool:

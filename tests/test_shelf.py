@@ -5,7 +5,14 @@ from test_personas import add_game
 
 from infiltrator.catalogue import connect
 from infiltrator.personas import Persona, save_persona
-from infiltrator.shelf import build_shelf, current_shelf, fill_shelf, rotate
+from infiltrator.shelf import (
+    build_shelf,
+    current_shelf,
+    demo_shelf,
+    fill_demo_shelf,
+    fill_shelf,
+    rotate,
+)
 
 
 @pytest.fixture
@@ -171,3 +178,68 @@ def test_fill_on_a_full_shelf_changes_nothing(conn):
     before = shelf_names(conn)
     assert fill_shelf(conn, tom, 6, now=clock()) == []
     assert shelf_names(conn) == before
+
+
+def test_demo_shelf_is_only_the_arrivals(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    build_shelf(conn, tom, 6, now=clock())
+    add_game(conn, "fresh", quality_tier=1)
+    assert demo_shelf(conn, tom, 6, {"fresh"}, now=clock()) == ["fresh"]
+    assert shelf_names(conn) == ["fresh"]
+
+
+def test_demo_shelf_keeps_the_persona_filters(conn):
+    add_game(conn, "fresh")
+    add_game(conn, "foreign", language="Japanese")
+    assert demo_shelf(conn, P(conn, "tom", language="English"), 6, {"fresh", "foreign"}) == [
+        "fresh"
+    ]
+
+
+def test_demo_shelf_is_one_per_family(conn):
+    add_game(conn, "puckman", title="PuckMan", family="puckman", quality_tier=9)
+    add_game(conn, "pacman", title="Pac-Man", family="puckman", parent="puckman", quality_tier=9)
+    tom = P(conn, "tom", language=None)
+    assert demo_shelf(conn, tom, 6, {"puckman", "pacman"}) == ["puckman"]
+
+
+def test_demo_shelf_caps_at_shelf_size_best_first(conn):
+    add_game(conn, "meh", quality_tier=3)
+    add_game(conn, "good", quality_tier=6)
+    add_game(conn, "great", quality_tier=9)
+    assert demo_shelf(conn, P(conn, "tom"), 2, {"meh", "good", "great"}) == ["great", "good"]
+
+
+def test_demo_shelf_goes_in_the_history(conn):
+    add_game(conn, "fresh")
+    demo_shelf(conn, P(conn, "tom"), 6, {"fresh"})
+    rows = conn.execute("SELECT set_name, action FROM shelf_history").fetchall()
+    assert [(r["set_name"], r["action"]) for r in rows] == [("fresh", "on")]
+
+
+def test_demo_shelf_with_no_eligible_arrivals_changes_nothing(conn):
+    stock(conn, 3)
+    tom = P(conn, "tom")
+    build_shelf(conn, tom, 6, now=clock())
+    add_game(conn, "foreign", language="Japanese")
+    before = shelf_names(conn)
+    assert demo_shelf(conn, tom, 6, {"foreign"}) == []
+    assert shelf_names(conn) == before
+
+
+def test_fill_demo_shelf_only_tops_up_with_arrivals(conn):
+    add_game(conn, "fresh")
+    tom = P(conn, "tom")
+    demo_shelf(conn, tom, 6, {"fresh"}, now=clock())
+    add_game(conn, "old_but_great", quality_tier=9)
+    add_game(conn, "fresher", quality_tier=1)
+    assert fill_demo_shelf(conn, tom, 6, {"fresh", "fresher"}, now=clock()) == ["fresher"]
+    assert shelf_names(conn) == ["fresh", "fresher"]
+
+
+def test_demo_shelf_shows_a_new_clone_of_an_old_game(conn):
+    add_game(conn, "puckman", title="PuckMan", family="puckman", quality_tier=9)
+    add_game(conn, "pacman", title="Pac-Man", family="puckman", parent="puckman", quality_tier=9)
+    tom = P(conn, "tom", language=None)
+    assert demo_shelf(conn, tom, 6, {"pacman"}) == ["pacman"]
