@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from infiltrator.catalogue import utcnow
+from infiltrator.catalogue.arrivals import record_arrivals
 from infiltrator.dat import Dat, Game
 from infiltrator.metadata import SetMeta
 from infiltrator.names import title
@@ -65,4 +66,5 @@ def sync_games(conn: sqlite3.Connection, library: Path, dat: Dat, meta: dict[str
     with conn:
         conn.execute("DELETE FROM games")
         conn.executemany(f"INSERT INTO games ({COLUMNS}) VALUES ({placeholders})", rows)
+        record_arrivals(conn, {g.name: library / f"{g.name}.zip" for g in games})
     return len(rows)
