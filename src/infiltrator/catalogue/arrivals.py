@@ -1,8 +1,7 @@
-"""When each set first arrived in the library, and what counts as today."""
+"""When each set first arrived in the library, and what counts as new."""
 
 import sqlite3
-from datetime import UTC, datetime
-from datetime import time as midnight
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -24,7 +23,6 @@ def arrived_since(conn: sqlite3.Connection, since: str) -> set[str]:
     return {r["set_name"] for r in rows if datetime.fromisoformat(r["arrived_at"]) >= start}
 
 
-def start_of_local_day(now: datetime | None = None) -> str:
-    """Local midnight of today, as a UTC instant. Naive astimezone() applies DST for that date."""
-    today = (now or datetime.now(UTC)).astimezone().date()
-    return datetime.combine(today, midnight()).astimezone().astimezone(UTC).isoformat()
+def window_start(days: int, now: datetime | None = None) -> str:
+    """The UTC instant *days* × 24 hours before now: a rolling window, so midnight means nothing."""
+    return ((now or datetime.now(UTC)) - timedelta(days=days)).astimezone(UTC).isoformat()

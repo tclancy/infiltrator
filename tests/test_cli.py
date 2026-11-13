@@ -1,4 +1,5 @@
 import os
+import time
 
 import pytest
 from conftest import chips_for, make_zip
@@ -309,7 +310,7 @@ def demo_since():
     return current(connect(load_settings().db_path))
 
 
-def test_play_new_shows_only_todays_arrivals(home, tv):
+def test_play_new_shows_only_recent_arrivals(home, tv):
     shelf, refreshed = tv
     stock_library_long_ago(home, "alpha")
     stock_drop(home, "delta")
@@ -331,7 +332,7 @@ def test_play_new_with_nothing_new_changes_nothing(home, tv):
     run("play", "kids")
     result = run("play", "tom", "--new")
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == "Nothing new today for tom."
+    assert result.output.strip() == "Nothing new for tom in the last 24 hours."
     assert on_tv(shelf) == ["alpha"]
     from infiltrator.catalogue import connect
     from infiltrator.catalogue.tv import tv_persona
@@ -369,3 +370,34 @@ def test_a_plain_play_ends_the_demo(home, tv):
     run("play", "tom", "--new")
     run("play", "tom")
     assert demo_since() is None
+
+
+def stock_library_hours_ago(home, hours, *names):
+    library = home.parent / "library"
+    when = time.time() - hours * 3600
+    for name in names:
+        path = make_zip(library / f"{name}.zip", chips_for(name))
+        os.utime(path, (when, when))
+
+
+def test_play_new_days_reaches_further_back(home, tv):
+    shelf, _ = tv
+    stock_library_hours_ago(home, 70, "alpha")
+    run("rescan")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    assert run("play", "tom", "--new").output.strip() == "Nothing new for tom in the last 24 hours."
+    result = run("play", "tom", "--new", "--days", "3")
+    assert result.exit_code == 0, result.output
+    assert on_tv(shelf) == ["alpha"]
+
+
+def test_play_new_days_refuses_zero(home):
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    assert run("play", "tom", "--new", "--days", "0").exit_code != 0
+
+
+def test_days_without_new_is_refused(home, tv):
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run("play", "tom", "--days", "2")
+    assert result.exit_code != 0
+    assert "--new" in result.output

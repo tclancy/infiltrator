@@ -1,6 +1,7 @@
 # Infiltrator: `play --new`, demo today's arrivals
 
-Approved requirements: Tom, 2026-11-12, in chat. Builds on
+Approved requirements: Tom, 2026-11-12, in chat. **"Today" (requirement 6) is
+superseded by a rolling window: `2026-11-13-new-rolling-window-design.md`.** Builds on
 `2026-10-30-shelf-brain-design.md` and `2026-10-30-romm-end-design.md`.
 
 ## Intent
