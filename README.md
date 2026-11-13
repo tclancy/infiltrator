@@ -62,7 +62,8 @@ infiltrator shelf build tom       # pick the shelf
 infiltrator shelf show tom
 infiltrator shelf rotate tom      # the sommelier: swap the longest-shelved game for a fresh one
 infiltrator play tom              # put tom's shelf on the TV (swap to `play party` for a party)
-infiltrator play tom --new        # demo today's arrivals on the TV; `play tom` puts the usual shelf back
+infiltrator play tom --new        # demo the last 24 hours' arrivals on the TV; `play tom` puts the usual shelf back
+infiltrator play tom --new --days 3   # ...or the last 3 days'
 infiltrator issue log "Heavy Barrel" --device sabrina --note "froze on stage 2"
 infiltrator tune set "Heavy Barrel" --device sabrina --settings 'L1/R1 rotate (keyboard device)'
                                   # a tuned game counts as gamepad-playable
@@ -80,9 +81,10 @@ to rescan and to forget games that left; if RomM doesn't answer, you'll see
 `The TV will catch up shortly.` and the next sieve tries again. If `shelf_dir` holds a file Infiltrator didn't put
 there, it changes nothing and says `Try again later!`; move that file into the drop folder.
 
-**Demo today's arrivals.** `play tom --new` swaps tom's shelf for the games that arrived in
-the library today (homelab's local day), still filtered for tom and capped at `shelf_size`.
-While the demo is on, each sieve adds only games new since the demo's day began, so drops
+**Demo new arrivals.** `play tom --new` swaps tom's shelf for the games that arrived in
+the library in the last 24 hours (a rolling window, so midnight doesn't reset it; `--days 3`
+looks back 3 days), still filtered for tom and capped at `shelf_size`.
+While the demo is on, each sieve adds only games new since the demo's window began, so drops
 join it as you go. `play tom`, `shelf build tom` or `shelf rotate tom` ends it. A game's
 arrival is when its set first reached the library; sets there before this existed count from
 their library file's date.

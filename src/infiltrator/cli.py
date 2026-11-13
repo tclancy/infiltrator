@@ -9,7 +9,7 @@ import click
 import typer
 
 from infiltrator.catalogue import connect
-from infiltrator.catalogue.arrivals import arrived_since, start_of_local_day
+from infiltrator.catalogue.arrivals import arrived_since, window_start
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
@@ -55,7 +55,13 @@ SETTLE_SECONDS = 5.0  # how long the drop folder must sit still before the sieve
 INPUT_CHOICES = {1: GAMEPAD, 2: GAMEPAD | SPINNERS, 3: GAMEPAD | SPINNERS | LIGHT_GUN}
 
 Verbose = Annotated[bool, typer.Option("--verbose", "-v", help="Show the nerd stuff.")]
-New = Annotated[bool, typer.Option("--new", help="Only the games that arrived today.")]
+New = Annotated[
+    bool, typer.Option("--new", help="Only the games that arrived in the last 24 hours.")
+]
+Days = Annotated[
+    int | None,
+    typer.Option("--days", min=1, help="With --new: look back this many days instead of one."),
+]
 
 
 def _settings() -> Settings:
@@ -227,10 +233,12 @@ def _persona(conn: sqlite3.Connection, name: str) -> Persona:
 
 
 @app.command()
-def play(persona: str, new: New = False, verbose: Verbose = False) -> None:
+def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = False) -> None:
     """Put this persona's shelf on the TV."""
+    if days is not None and not new:
+        raise typer.BadParameter("goes with --new.", param_hint="--days")
     if new:
-        _play_new(persona, verbose)
+        _play_new(persona, days or 1, verbose)
         return
     settings = _settings()
     conn = _db(settings)
@@ -245,17 +253,21 @@ def play(persona: str, new: New = False, verbose: Verbose = False) -> None:
     shelf_show(persona)
 
 
-def _play_new(persona: str, verbose: bool) -> None:
-    """Put today's arrivals on the TV as this persona's shelf, until a normal play or build."""
+def _window_words(days: int) -> str:
+    return "the last 24 hours" if days == 1 else f"the last {days} days"
+
+
+def _play_new(persona: str, days: int, verbose: bool) -> None:
+    """Put the last *days* of arrivals on the TV as this persona's shelf, until a normal play."""
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    since = start_of_local_day()
+    since = window_start(days)
     with _or_try_again_later(verbose):
         dat = load_dat(settings.dat_path)
         preflight(settings)
         if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
-            typer.echo(f"Nothing new today for {persona}.")
+            typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
             return
         set_tv_persona(conn, persona)
         start_demo(conn, since)

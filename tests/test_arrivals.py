@@ -1,12 +1,11 @@
 import os
-import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from conftest import chips_for, make_zip
 
 from infiltrator.catalogue import connect
-from infiltrator.catalogue.arrivals import arrived_since, start_of_local_day
+from infiltrator.catalogue.arrivals import arrived_since, window_start
 from infiltrator.catalogue.games import sync_games
 from infiltrator.dat import load_dat
 
@@ -18,15 +17,6 @@ def lib(tmp_path, synthetic_dat):
     library = tmp_path / "library"
     library.mkdir()
     return library, load_dat(synthetic_dat), connect(tmp_path / "c.db")
-
-
-@pytest.fixture
-def new_york(monkeypatch):
-    monkeypatch.setenv("TZ", "America/New_York")
-    time.tzset()
-    yield
-    monkeypatch.undo()
-    time.tzset()
 
 
 def arrived_at(conn, name):
@@ -73,13 +63,34 @@ def test_arrived_since_compares_instants_not_strings(lib):
     assert arrived_since(conn, "2026-10-31T20:00:00-04:00") == {"delta"}
 
 
-def test_start_of_local_day_is_local_midnight_in_utc(new_york):
-    nine_pm_nov_12_local = datetime(2026, 11, 13, 2, 0, tzinfo=UTC)
-    assert start_of_local_day(nine_pm_nov_12_local) == "2026-11-12T05:00:00+00:00"
+NOW = datetime(2026, 11, 13, 5, 10, tzinfo=UTC)  # 00:10 in New York
 
 
-def test_start_of_local_day_follows_dst(new_york):
-    # 2026-11-01 is the day New York falls back; its midnight was still EDT (-04:00).
-    assert start_of_local_day(datetime(2026, 11, 1, 18, 0, tzinfo=UTC)) == (
-        "2026-11-01T04:00:00+00:00"
+def arrive(conn, name, when):
+    conn.execute(
+        "INSERT INTO arrivals (set_name, arrived_at) VALUES (?, ?)", (name, when.isoformat())
     )
+
+
+def test_the_window_is_the_last_24_hours(lib):
+    _, _, conn = lib
+    arrive(conn, "alpha", NOW - timedelta(hours=23))
+    arrive(conn, "beta", NOW - timedelta(hours=25))
+    assert arrived_since(conn, window_start(1, NOW)) == {"alpha"}
+
+
+def test_midnight_doesnt_reset_the_window(lib):
+    _, _, conn = lib
+    arrive(conn, "alpha", NOW - timedelta(minutes=20))  # 23:50 local, the day before
+    assert arrived_since(conn, window_start(1, NOW)) == {"alpha"}
+
+
+def test_days_widens_the_window(lib):
+    _, _, conn = lib
+    arrive(conn, "alpha", NOW - timedelta(hours=70))
+    assert arrived_since(conn, window_start(1, NOW)) == set()
+    assert arrived_since(conn, window_start(3, NOW)) == {"alpha"}
+
+
+def test_the_window_start_is_utc(lib):
+    assert window_start(1, NOW) == "2026-11-12T05:10:00+00:00"
