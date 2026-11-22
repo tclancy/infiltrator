@@ -165,3 +165,52 @@ def test_an_fbneo_optional_list_without_the_fbneo_set_list_is_refused(tmp_path):
     cfg = _toml(tmp_path, BASE + 'fbneo_optional_path = "/o.json"\n')
     with pytest.raises(ValueError, match="fbneo_dat_path"):
         load_settings(env={}, config_file=cfg)
+
+
+FBNEO = 'fbneo_dat_path = "/f.dat"\n'
+FOUR_FOLDERS = (
+    'shelf_dir = "/r/roms/mame"\nbios_dir = "/r/bios/mame"\n'
+    'fbneo_shelf_dir = "/r/roms/fbneo"\nfbneo_bios_dir = "/r/bios/fbneo"\n'
+)
+
+
+def test_fbneo_folders_are_off_unless_configured(tmp_path):
+    s = load_settings(env={}, config_file=_toml(tmp_path, BASE + FBNEO))
+    assert (s.fbneo_shelf_dir, s.fbneo_bios_dir) == (None, None)
+
+
+def test_fbneo_folders_come_from_toml_and_the_environment(tmp_path):
+    s = load_settings(env={}, config_file=_toml(tmp_path, BASE + FBNEO + FOUR_FOLDERS))
+    assert (s.fbneo_shelf_dir, s.fbneo_bios_dir) == (Path("/r/roms/fbneo"), Path("/r/bios/fbneo"))
+    assert (s.shelf_dir, s.bios_dir) == (Path("/r/roms/mame"), Path("/r/bios/mame"))
+    env = {"INFILTRATOR_FBNEO_SHELF_DIR": "/e/roms", "INFILTRATOR_FBNEO_BIOS_DIR": "~/e/bios"}
+    s = load_settings(env=env, config_file=_toml(tmp_path, BASE + FBNEO + FOUR_FOLDERS))
+    assert (s.fbneo_shelf_dir, s.fbneo_bios_dir) == (Path("/e/roms"), Path.home() / "e/bios")
+
+
+def test_fbneo_folders_without_mames_are_fine(tmp_path):
+    folders = 'fbneo_shelf_dir = "/r/roms/fbneo"\nfbneo_bios_dir = "/r/bios/fbneo"\n'
+    s = load_settings(env={}, config_file=_toml(tmp_path, BASE + FBNEO + folders))
+    assert s.shelf_dir is None and s.fbneo_shelf_dir == Path("/r/roms/fbneo")
+
+
+@pytest.mark.parametrize(
+    ("folders", "says"),
+    [
+        ('fbneo_shelf_dir = "/r/roms/fbneo"\n', "fbneo_bios_dir"),
+        ('fbneo_bios_dir = "/r/bios/fbneo"\n', "fbneo_shelf_dir"),
+        (FOUR_FOLDERS.replace("/r/bios/fbneo", "/r/roms/fbneo"), "separate"),
+        (FOUR_FOLDERS.replace("/r/roms/fbneo", "/r/roms/mame/fbneo"), "separate"),
+        (FOUR_FOLDERS.replace("/r/bios/fbneo", "/r/bios/mame"), "separate"),
+        (FOUR_FOLDERS.replace("/r/roms/fbneo", "/r/bios"), "separate"),
+    ],
+)
+def test_fbneo_folders_come_as_a_pair_apart_from_every_other_folder(tmp_path, folders, says):
+    with pytest.raises(ValueError, match=says):
+        load_settings(env={}, config_file=_toml(tmp_path, BASE + FBNEO + folders))
+
+
+def test_fbneo_folders_without_the_fbneo_set_list_are_refused(tmp_path):
+    folders = 'fbneo_shelf_dir = "/r/roms/fbneo"\nfbneo_bios_dir = "/r/bios/fbneo"\n'
+    with pytest.raises(ValueError, match="fbneo_dat_path"):
+        load_settings(env={}, config_file=_toml(tmp_path, BASE + folders))

@@ -1,7 +1,7 @@
 import zipfile
 
 import pytest
-from conftest import chips_for, fbneo_chips_for, make_zip
+from conftest import chips_for, fbneo_chips_for, fbneo_dat_xml, make_zip
 
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.games import sync_games
@@ -147,27 +147,95 @@ def test_each_emulators_folder_is_catalogued_by_its_own_set_list(both):
     assert row(conn, "alpha")["path"] == str(library / DEFAULT_EMULATOR / "alpha.zip")
 
 
-def test_fbneo_rows_leave_the_mame_only_columns_empty(both):
+MAME_ONLY = (
+    "language",
+    "mature",
+    "genre",
+    "players",
+    "control",
+    "buttons",
+    "quality_tier",
+    "a11y_one_button",
+    "a11y_stick_only",
+)
+
+
+def test_an_fbneo_row_sharing_no_rom_with_a_mame_game_leaves_the_mame_only_columns_empty(both):
+    library, dats, conn = both
+    make_zip(library / DEFAULT_EMULATOR / "alpha.zip", chips_for("alpha"))
+    make_zip(library / FBNEO / "fbonly.zip", fbneo_chips_for("fbonly"))
+    meta = {"alpha": SetMeta(language="English", mature=False, genre="Shooter", quality_tier=8)}
+    sync_games(conn, library, dats, meta)
+    fbneo = row(conn, "fbonly", FBNEO)
+    assert {c: fbneo[c] for c in MAME_ONLY} == dict.fromkeys(MAME_ONLY)
+    assert (fbneo["family"], fbneo["title"]) == ("fbonly", "Only In FBNeo")
+    mame = row(conn, "alpha")
+    assert (mame["language"], mame["quality_tier"], mame["control"]) == ("English", 8, "joy4way")
+
+
+def test_an_fbneo_row_takes_the_family_and_play_columns_of_the_mame_game_it_stands_in_for(both):
     library, dats, conn = both
     make_zip(library / DEFAULT_EMULATOR / "alpha.zip", chips_for("alpha"))
     make_zip(library / FBNEO / "alpha.zip", fbneo_chips_for("alpha"))
-    meta = {"alpha": SetMeta(language="English", mature=False, genre="Shooter", quality_tier=8)}
+    meta = {"alpha": SetMeta(language="English", mature=True, genre="Shooter", quality_tier=8)}
     sync_games(conn, library, dats, meta)
-    mame_only = (
-        "language",
-        "mature",
-        "genre",
-        "players",
-        "control",
-        "buttons",
-        "quality_tier",
-        "a11y_one_button",
-        "a11y_stick_only",
+    mame, fbneo = row(conn, "alpha"), row(conn, "alpha", FBNEO)
+    assert {c: fbneo[c] for c in ("family", "title", *MAME_ONLY)} == {
+        c: mame[c] for c in ("family", "title", *MAME_ONLY)
+    }
+    assert fbneo["language"] == "English" and fbneo["control"] == "joy4way"
+    assert fbneo["description"] == "Alpha Blaster (World)"  # its own, not borrowed
+    assert fbneo["parent"] is None  # FBNeo's own parentage
+
+
+def test_an_fbneo_row_is_filed_under_the_mame_family_not_fbneos_own(tmp_path, synthetic_dat):
+    # FBNeo files fbalpha under a root called "other"; its chips are MAME alpha's.
+    fbneo_games = [
+        ("other", {"description": "Something Else"}, [("o.rom", "fb1", {})], ""),
+        (
+            "fbalpha",
+            {"description": "Alpha (FBNeo)", "cloneof": "other"},
+            [("x1.rom", "a1", {}), ("x2.rom", "a2", {})],
+            "",
+        ),
+    ]
+    fbneo_dat = tmp_path / "fb.dat"
+    fbneo_dat.write_text(fbneo_dat_xml(fbneo_games))
+    dats = {DEFAULT_EMULATOR: load_dat(synthetic_dat), FBNEO: load_dat(fbneo_dat, FBNEO)}
+    library, conn = tmp_path / "library", connect(tmp_path / "c.db")
+    make_zip(library / DEFAULT_EMULATOR / "alphab.zip", chips_for("alphab"))
+    alpha = chips_for("alpha")
+    make_zip(
+        library / FBNEO / "fbalpha.zip", {"x1.rom": alpha["a1.bin"], "x2.rom": alpha["a2.bin"]}
     )
-    fbneo = row(conn, "alpha", FBNEO)
-    assert {c: fbneo[c] for c in mame_only} == dict.fromkeys(mame_only)
-    mame = row(conn, "alpha")
-    assert (mame["language"], mame["quality_tier"], mame["control"]) == ("English", 8, "joy4way")
+    sync_games(conn, library, dats, {"alphab": SetMeta(genre="Shooter")})
+    fb = row(conn, "fbalpha", FBNEO)
+    # The parent is not in the library, so alphab, the family's only MAME row there, lends.
+    assert (fb["family"], fb["parent"], fb["title"], fb["genre"]) == (
+        "alpha",
+        "other",
+        "Alpha Blaster",
+        "Shooter",
+    )
+
+
+def test_the_family_parent_lends_its_columns_before_a_clone_does(both):
+    library, dats, conn = both
+    make_zip(library / DEFAULT_EMULATOR / "alpha.zip", chips_for("alpha"))
+    make_zip(library / DEFAULT_EMULATOR / "alphab.zip", chips_for("alphab"))
+    make_zip(library / FBNEO / "alpha.zip", fbneo_chips_for("alpha"))
+    meta = {"alpha": SetMeta(genre="Parent's"), "alphab": SetMeta(genre="Clone's")}
+    sync_games(conn, library, dats, meta)
+    assert row(conn, "alpha", FBNEO)["genre"] == "Parent's"
+
+
+def test_fbneo_rows_borrow_even_when_fbneo_is_listed_first(both):
+    library, dats, conn = both
+    make_zip(library / DEFAULT_EMULATOR / "alpha.zip", chips_for("alpha"))
+    make_zip(library / FBNEO / "alpha.zip", fbneo_chips_for("alpha"))
+    reversed_dats = {FBNEO: dats[FBNEO], DEFAULT_EMULATOR: dats[DEFAULT_EMULATOR]}
+    sync_games(conn, library, reversed_dats, {"alpha": SetMeta(genre="Shooter")})
+    assert row(conn, "alpha", FBNEO)["genre"] == "Shooter"
 
 
 def test_a_set_in_the_wrong_emulators_folder_is_not_catalogued(both):

@@ -4,6 +4,7 @@ from collections.abc import Collection, Mapping
 
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, Dat, OptionalRoms, load_dat, load_optional_roms
+from infiltrator.standins import fbneo_wanted
 
 
 def _fbneo_optional(settings: Settings) -> OptionalRoms | None:
@@ -29,3 +30,17 @@ Wanted = Mapping[str, Collection[str] | None]
 def default_wanted(dats: Mapping[str, Dat]) -> dict[str, frozenset[str] | None]:
     """Every MAME 2003-Plus set; no set for any other emulator until something names it."""
     return {name: None if name == DEFAULT_EMULATOR else frozenset() for name in dats}
+
+
+def wanted_for(
+    dats: Mapping[str, Dat], fbneo_families: Collection[str]
+) -> dict[str, frozenset[str] | None]:
+    """Every MAME 2003-Plus set, and for the games chosen to run on FBNeo, their FBNeo sets.
+
+    Every set that stands in for such a game is named, with its BIOS: the rebuild makes the ones
+    the chips allow and passes over the rest. Without FBNeo's set list the choices mean nothing.
+    """
+    wanted = default_wanted(dats)
+    if FBNEO in dats:
+        wanted[FBNEO] = fbneo_wanted(dats[DEFAULT_EMULATOR], dats[FBNEO], fbneo_families)
+    return wanted

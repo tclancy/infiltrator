@@ -72,7 +72,7 @@ def primary_key(conn, table) -> list[str]:
 
 
 def test_every_row_survives_the_migration(v5):
-    _migrate(v5)
+    _migrate(v5, up_to=6)
     assert v5.execute("PRAGMA user_version").fetchone()[0] == 6
     for table, expected in V5_ROWS.items():
         assert rows(v5, table) == expected, table

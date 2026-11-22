@@ -31,15 +31,18 @@ dat_path = "~/mame2003-plus-libretro/metadata/mame2003-plus.xml"
 metadata_dir = "~/infiltrator/metadata"
 shelf_size = 8                          # 6 to 10
 
-# Optional: put a shelf on a RomM server's TV list.
-shelf_dir = "/mnt/samsungusb/games/romm/library/roms/arcade"  # holds only the shelf
-bios_dir = "/mnt/samsungusb/games/romm/library/bios/arcade"
+# Optional: put a shelf on a RomM server's TV list. These are MAME 2003-Plus's folders.
+shelf_dir = "/mnt/samsungusb/games/romm/library/roms/mame"  # holds only the shelf
+bios_dir = "/mnt/samsungusb/games/romm/library/bios/mame"
 romm_url = "http://localhost:7767"
 romm_token_file = "~/.config/infiltrator/romm-token"   # chmod 600
 
-# Optional: FBNeo's set list, so FBNeo sets can be kept beside the MAME 2003-Plus ones.
+# Optional: FBNeo's set list, so a game can be switched to FBNeo.
 fbneo_dat_path = "~/infiltrator/fbneo-arcade.dat"
 fbneo_optional_path = "~/infiltrator/fbneo-optional.json"   # needs fbneo_dat_path
+# ...and FBNeo's own RomM folders, without which no game is shown on FBNeo.
+fbneo_shelf_dir = "/mnt/samsungusb/games/romm/library/roms/fbneo"   # needs fbneo_dat_path
+fbneo_bios_dir = "/mnt/samsungusb/games/romm/library/bios/fbneo"
 ```
 
 The RomM token is a secret, so it never goes in this file: it is read from
@@ -56,7 +59,12 @@ The RomM token is a secret, so it never goes in this file: it is read from
 
   With FBNeo configured, the sieve also keeps any chip only FBNeo knows: a drop file holding
   one that no library zip has stays in the drop folder (`--verbose` says `held for fbneo`),
-  because the library holds only sets. No FBNeo set is built yet; choosing which is next.
+  because the library holds only sets. FBNeo sets are built only for games switched to FBNeo
+  (see below).
+- **`fbneo_shelf_dir`** and **`fbneo_bios_dir`** (optional, set both or neither) are FBNeo's
+  RomM folders, as `shelf_dir` and `bios_dir` are MAME 2003-Plus's. No two of the four may be
+  the same folder or inside one another. Each can be overridden like any other key
+  (`INFILTRATOR_FBNEO_SHELF_DIR`, `INFILTRATOR_FBNEO_BIOS_DIR`).
 
 **The library** keeps one folder per emulator: `library/mame2003-plus/<set>.zip` and
 `library/fbneo/<set>.zip`. Both emulators use some of the same set names for different
@@ -90,6 +98,8 @@ infiltrator play tom --new --days 3   # ...or the last 3 days'
 infiltrator issue log "Heavy Barrel" --device sabrina --note "froze on stage 2"
 infiltrator tune set "Heavy Barrel" --device sabrina --settings 'L1/R1 rotate (keyboard device)'
                                   # a tuned game counts as gamepad-playable
+infiltrator tune set "Heavy Barrel" --device sabrina --settings 'right stick aims' --emulator fbneo
+                                  # ...and from now on it runs on FBNeo; `--emulator mame2003-plus` undoes it
 infiltrator rescan                # rebuild the game list from the library
 ```
 
@@ -103,6 +113,23 @@ on the shelf is ever bumped by a new arrival. With `romm_url` and the token set,
 to rescan and to forget games that left; if RomM doesn't answer, you'll see
 `The TV will catch up shortly.` and the next sieve tries again. If `shelf_dir` holds a file Infiltrator didn't put
 there, it changes nothing and says `Try again later!`; move that file into the drop folder.
+Each emulator with folders is its own RomM platform, named after its games folder (`mame`,
+`fbneo`; `arcade` on a setup from before emulators). RomM only meets a folder by scanning it,
+so the first time a platform is missing Infiltrator asks RomM to scan every folder once.
+
+**Switching a game to FBNeo.** Every game runs on MAME 2003-Plus unless you say otherwise
+with `tune set ... --emulator fbneo`. That needs `fbneo_dat_path`, and the TV shows FBNeo
+games only once `fbneo_shelf_dir` and `fbneo_bios_dir` are set too; until then the game stays
+on the TV as its MAME 2003-Plus set. Infiltrator works out which FBNeo sets are the same game
+from the chips they share with its MAME 2003-Plus sets, and builds the ones it can from chips
+it already has: at once from the library, or at the next sieve when a chip is still held in
+the drop folder (it says `Not on fbneo yet` then). The game
+is still one game: it keeps its MAME title, filters and place on every shelf that has it, and
+on the TV its MAME 2003-Plus zip leaves `shelf_dir` as its FBNeo zip arrives in
+`fbneo_shelf_dir` (with any FBNeo BIOS it needs in `fbneo_bios_dir`). The TV picks the
+emulator from the folder, so nothing is set on the TV. `shelf drop` and `shelf add` by title
+work whichever emulator it is on. Switching back, or the FBNeo zip going away, puts the MAME
+2003-Plus set back the same way.
 
 **Demo new arrivals.** `play tom --new` swaps tom's shelf for the games that arrived in
 the library in the last 24 hours (a rolling window, so midnight doesn't reset it; `--days 3`

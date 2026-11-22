@@ -134,10 +134,14 @@ def test_tune_set_by_title(home):
 
 @pytest.fixture
 def tv(home, tmp_path, monkeypatch):
-    """RomM's folders, plus a stand-in for RomM that records refreshes."""
-    shelf, bios = tmp_path / "romm-arcade", tmp_path / "romm-bios"
-    shelf.mkdir()
-    bios.mkdir()
+    """RomM's folders, plus a stand-in for RomM that records refreshes.
+
+    The games folder is named `arcade`, as on an install from before emulators: RomM's platform
+    is the folder's name.
+    """
+    shelf, bios = tmp_path / "roms" / "arcade", tmp_path / "bios" / "arcade"
+    shelf.mkdir(parents=True)
+    bios.mkdir(parents=True)
     monkeypatch.setenv("INFILTRATOR_SHELF_DIR", str(shelf))
     monkeypatch.setenv("INFILTRATOR_BIOS_DIR", str(bios))
     refreshed = []
@@ -672,3 +676,253 @@ def test_fbneo_sets_in_the_library_are_catalogued_but_never_shelved_yet(with_fbn
     assert result.exit_code == 0, result.output
     assert on_tv(shelf) == ["alpha"]
     assert result.output.strip().splitlines()[-1] == "Alpha Blaster"
+
+
+# Choosing an emulator per game.
+
+
+def catalogue():
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    return connect(load_settings().db_path)
+
+
+def choices():
+    rows = catalogue().execute("SELECT family, emulator FROM game_emulators ORDER BY family")
+    return [tuple(r) for r in rows]
+
+
+def tunings():
+    rows = catalogue().execute("SELECT emulator, set_name, device, settings FROM control_tuning")
+    return sorted(tuple(r) for r in rows)
+
+
+def tune(title, *extra, settings="remap"):
+    return run("tune", "set", title, "--device", "sabrina", "--settings", settings, *extra)
+
+
+def test_tune_set_with_an_emulator_records_the_choice_for_the_game(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    result = tune("alpha blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert choices() == [("alpha", "fbneo")]
+    assert tunings() == [(DEFAULT_EMULATOR, "alpha", "sabrina", "remap")]
+
+
+def test_a_clones_choice_is_recorded_for_its_whole_game(with_fbneo):
+    stock_drop(with_fbneo, "alphab")
+    assert tune("Alpha Blaster", "--emulator", "fbneo").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]
+
+
+def test_tune_set_with_mame_2003_plus_forgets_the_choice(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    result = tune("Alpha Blaster", "--emulator", DEFAULT_EMULATOR, settings="plain")
+    assert result.exit_code == 0, result.output
+    assert choices() == []
+    assert tunings() == [(DEFAULT_EMULATOR, "alpha", "sabrina", "plain")]
+
+
+def test_tune_set_without_an_emulator_leaves_the_choice_alone(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert tune("Alpha Blaster", settings="again").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]
+
+
+@pytest.mark.parametrize(
+    ("emulator", "says"), [("snes9x", "No emulator called snes9x"), ("fbneo", "FBNeo")]
+)
+def test_an_emulator_that_cannot_run_games_here_changes_nothing(home, emulator, says):
+    stock_drop(home, "alpha")  # no FBNeo set list configured
+    result = tune("Alpha Blaster", "--emulator", emulator)
+    assert result.exit_code == 1
+    assert says in result.output and "Saved." not in result.output
+    assert choices() == [] and tunings() == []
+
+
+def test_an_unknown_emulator_is_refused_with_fbneo_configured_too(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    assert tune("Alpha Blaster", "--emulator", "FBNeo").exit_code == 1
+    assert choices() == [] and tunings() == []
+
+
+def test_the_choice_survives_a_rescan(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert run("rescan").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]
+
+
+@pytest.fixture
+def fbneo_home(with_fbneo, fbneo_optional_json, monkeypatch):
+    """FBNeo's set list and its optional-ROM list, so alphaua can be built without its PROM."""
+    monkeypatch.setenv("INFILTRATOR_FBNEO_OPTIONAL_PATH", str(fbneo_optional_json))
+    return with_fbneo
+
+
+def fbneo_library(home):
+    folder = home.parent / "library" / "fbneo"
+    return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+
+
+def choose_directly(family, emulator="fbneo"):
+    """The choice alone, as `tune set` records it, without the build that follows it there."""
+    from infiltrator.catalogue.emulators import choose_emulator
+
+    choose_emulator(catalogue(), family, emulator)
+
+
+def test_a_sieve_with_an_empty_drop_folder_builds_a_chosen_games_fbneo_set(fbneo_home):
+    stock_drop(fbneo_home, "alpha")
+    choose_directly("alpha")
+    assert list(fbneo_home.iterdir()) == []
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]  # FBNeo's alpha needs a chip nobody has
+    found = catalogue().execute("SELECT set_name FROM games WHERE emulator = 'fbneo'").fetchall()
+    assert [r["set_name"] for r in found] == ["alphaua"]
+
+
+def test_a_chosen_games_fbneo_set_comes_with_the_fbneo_bios_it_needs(fbneo_home):
+    stock_drop(fbneo_home, "alpha", "biosx", "beta")
+    choose_directly("beta")
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["betafb.zip", "biosx.zip"]
+
+
+def test_games_nobody_chose_for_fbneo_get_no_fbneo_set(fbneo_home):
+    stock_drop(fbneo_home, "alpha", "biosx", "beta")
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == []
+
+
+def test_tune_set_to_fbneo_builds_the_set_without_waiting_for_a_sieve(fbneo_home):
+    stock_drop(fbneo_home, "alpha")
+    left_there = make_zip(fbneo_home / "delta.zip", chips_for("delta"))
+    result = tune("Alpha Blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert result.output == "Saved.\n"
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]
+    assert left_there.exists()  # the drop folder is the sieve's alone
+
+
+def test_tune_set_to_fbneo_says_so_when_no_fbneo_set_can_be_built(fbneo_home):
+    stock_drop(fbneo_home, "delta")
+    result = tune("Delta", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert "Not on fbneo yet" in result.output
+    assert choices() == [("delta", "fbneo")]
+
+
+@pytest.fixture
+def fbneo_tv(fbneo_home, tv, tmp_path, monkeypatch):
+    """The TV with FBNeo's folders beside MAME 2003-Plus's; tom watching Alpha and Delta."""
+    folders = tmp_path / "roms" / "fbneo", tmp_path / "bios" / "fbneo"
+    for folder in folders:
+        folder.mkdir(parents=True)
+    monkeypatch.setenv("INFILTRATOR_FBNEO_SHELF_DIR", str(folders[0]))
+    monkeypatch.setenv("INFILTRATOR_FBNEO_BIOS_DIR", str(folders[1]))
+    stock_drop(fbneo_home, "alpha", "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    assert run("play", "tom").exit_code == 0
+    return tv[0], folders[0]
+
+
+def test_tuning_a_shelved_game_to_fbneo_switches_it_on_the_tv(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+    result = tune("Alpha Blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert on_tv(mame_tv) == ["delta"] and on_tv(fbneo_tv_folder) == ["alphaua"]
+    shown = run("shelf", "show", "tom").output.splitlines()
+    assert shown == ["Alpha Blaster", "Delta"]  # one Alpha Blaster, by its MAME title
+
+
+def test_tuning_back_to_mame_puts_the_mame_set_back_on_the_tv(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert tune("Alpha Blaster", "--emulator", DEFAULT_EMULATOR).exit_code == 0
+    assert on_tv(mame_tv) == ["alpha", "delta"] and on_tv(fbneo_tv_folder) == []
+
+
+def test_drop_and_add_by_title_act_on_the_fbneo_set(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    result = run("shelf", "drop", "tom", "Alpha Blaster")
+    assert result.output == "Out: Alpha Blaster\n"
+    assert on_tv(fbneo_tv_folder) == [] and on_tv(mame_tv) == ["delta"]
+    result = run("shelf", "add", "tom", "alpha blaster")
+    assert result.output == "In: Alpha Blaster\n"
+    assert on_tv(fbneo_tv_folder) == ["alphaua"] and on_tv(mame_tv) == ["delta"]
+
+
+def test_rotating_out_an_fbneo_set_prints_its_title(fbneo_tv):
+    _mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    with catalogue() as conn:  # alpha has been on longest; make it the only one that may go
+        conn.execute("DELETE FROM shelf WHERE set_name = 'delta'")
+    result = run("shelf", "rotate", "tom")
+    assert result.output.splitlines() == ["Out: Alpha Blaster", "In: Delta"]
+    assert on_tv(fbneo_tv_folder) == []
+
+
+def test_a_sieve_settles_a_game_whose_fbneo_set_left_the_library(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    (fbneo_tv_folder / "alphaua.zip").unlink()
+    (fbneo_tv_folder.parents[1] / "library" / "fbneo" / "alphaua.zip").unlink()
+    with catalogue() as conn:  # FBNeo's set list no longer names it, say, so it is not rebuilt
+        conn.execute("DELETE FROM game_emulators")
+    assert run("sieve").exit_code == 0
+    assert on_tv(mame_tv) == ["alpha", "delta"] and on_tv(fbneo_tv_folder) == []
+    shelf_rows = catalogue().execute("SELECT emulator, set_name FROM shelf ORDER BY 2")
+    assert [tuple(r) for r in shelf_rows] == [
+        (DEFAULT_EMULATOR, "alpha"),
+        (DEFAULT_EMULATOR, "delta"),
+    ]
+
+
+def fbneo_set_appears(home, name="alphaua"):
+    """An FBNeo set lands in the library and the catalogue, and nothing else happens."""
+    chips = {k: v for k, v in fbneo_chips_for(name).items() if k != "ua-prom.bin"}
+    make_zip(home.parent / "library" / "fbneo" / f"{name}.zip", chips)
+    assert run("rescan").exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "command", [("shelf", "drop", "tom", "Delta"), ("play", "tom"), ("shelf", "build", "tom")]
+)
+def test_every_shelf_change_first_settles_the_shelf(fbneo_tv, command):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    choose_directly("alpha")
+    fbneo_set_appears(fbneo_tv_folder.parents[1] / "drop")
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+    assert run(*command).exit_code == 0
+    assert on_tv(fbneo_tv_folder) == ["alphaua"] and "alpha" not in on_tv(mame_tv)
+
+
+def test_a_demo_leaves_no_set_of_an_emulator_the_tv_no_longer_shows(fbneo_tv, monkeypatch):
+    mame_tv, _ = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    monkeypatch.delenv("INFILTRATOR_FBNEO_SHELF_DIR")
+    monkeypatch.delenv("INFILTRATOR_FBNEO_BIOS_DIR")
+    assert run("play", "tom", "--new").exit_code == 0
+    shelf_rows = catalogue().execute("SELECT emulator, set_name FROM shelf ORDER BY 2")
+    assert [tuple(r) for r in shelf_rows] == [
+        (DEFAULT_EMULATOR, "alpha"),
+        (DEFAULT_EMULATOR, "delta"),
+    ]
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+
+
+def test_without_fbneo_folders_a_game_tuned_to_fbneo_stays_on_mame(fbneo_home, tv):
+    mame_tv, _ = tv
+    stock_drop(fbneo_home, "alpha")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    assert tune("Alpha Blaster", "--emulator", "fbneo").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]  # built, ready for when it can be shown
+    assert on_tv(mame_tv) == ["alpha"]
+    assert run("shelf", "show", "tom").output == "Alpha Blaster\n"

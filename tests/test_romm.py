@@ -9,10 +9,11 @@ from infiltrator.romm import RommClient, RommError
 class FakeRomm:
     """Answers RomM's API from a script and records what was asked."""
 
-    def __init__(self, scan_states=("queued", "started", "finished"), platforms=None):
+    def __init__(self, scan_states=("queued", "started", "finished"), platforms=None, found=()):
         self.calls = []
         self.states = list(scan_states)
         self.platforms = platforms or [{"id": 7, "fs_slug": "arcade"}, {"id": 2, "fs_slug": "nes"}]
+        self.found = list(found)  # platforms RomM only knows once a scan of every folder ran
 
     def __call__(self, method, url, headers, body):
         self.calls.append((method, url, json.loads(body) if body else None))
@@ -20,6 +21,9 @@ class FakeRomm:
         if url.endswith("/api/platforms"):
             return self.platforms
         if url.endswith("/api/tasks/scan"):
+            if "platforms" not in json.loads(body):
+                self.platforms = self.platforms + self.found
+                self.states = ["finished", *self.states]
             return {"task_id": "scan-1", "status": "queued"}
         if url.endswith("/api/tasks/scan-1"):
             return {"task_id": "scan-1", "status": self.states.pop(0)}
@@ -90,3 +94,52 @@ def test_other_http_errors_are_not_retried():
 
     with pytest.raises(HTTPError):
         client(request).refresh_platform("arcade")
+
+
+def paths(fake):
+    return [(m, u.removeprefix("http://romm:8080"), b) for m, u, b in fake.calls]
+
+
+def test_a_platform_romm_has_not_met_gets_one_scan_of_every_folder_first():
+    fake = FakeRomm(found=[{"id": 9, "fs_slug": "fbneo"}])
+    client(fake).refresh_platform("fbneo")
+    assert paths(fake) == [
+        ("GET", "/api/platforms", None),
+        ("POST", "/api/tasks/scan", {"type": "quick"}),
+        ("GET", "/api/tasks/scan-1", None),
+        ("GET", "/api/platforms", None),
+        ("POST", "/api/tasks/scan", {"type": "quick", "platforms": [9]}),
+        ("GET", "/api/tasks/scan-1", None),
+        ("GET", "/api/tasks/scan-1", None),
+        ("GET", "/api/tasks/scan-1", None),
+        ("POST", "/api/tasks/run/cleanup_missing_roms", {"platform_ids": [9]}),
+    ]
+
+
+def test_a_known_platform_gets_no_scan_of_every_folder():
+    fake = FakeRomm(found=[{"id": 9, "fs_slug": "fbneo"}])
+    client(fake).refresh_platform("arcade")
+    assert {"type": "quick"} not in [b for _m, _u, b in fake.calls]
+
+
+def test_a_platform_still_unknown_after_the_scan_raises_after_one_scan_and_purges_nothing():
+    fake = FakeRomm(platforms=[{"id": 2, "fs_slug": "nes"}])
+    with pytest.raises(RommError, match="fbneo"):
+        client(fake).refresh_platform("fbneo")
+    scans = [b for _m, u, b in fake.calls if u.endswith("/api/tasks/scan")]
+    assert scans == [{"type": "quick"}]
+    assert not any(u.endswith("cleanup_missing_roms") for _m, u, _b in fake.calls)
+
+
+def test_the_scan_of_every_folder_waits_out_one_in_flight_too():
+    fake = FakeRomm(found=[{"id": 9, "fs_slug": "fbneo"}])
+    busy = iter([True, False, False])
+
+    def request(method, url, headers, body):
+        if url.endswith("/api/tasks/scan") and next(busy):
+            fake.calls.append((method, url, None))
+            raise HTTPError(url, 409, "scan in flight", {}, None)
+        return fake(method, url, headers, body)
+
+    client(request).refresh_platform("fbneo")
+    assert fake.calls[-1][2] == {"platform_ids": [9]}

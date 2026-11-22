@@ -95,7 +95,9 @@ def _dropped_families(conn: sqlite3.Connection, persona: str) -> set[str]:
 
 
 def eligible(conn: sqlite3.Connection, p: Persona, ignore_drops: bool = False) -> list[sqlite3.Row]:
-    # Only MAME 2003-Plus sets reach a shelf until choosing an emulator per game lands.
+    # MAME 2003-Plus rows only: a game is a MAME family, and is chosen as one. An FBNeo set
+    # stands in for a MAME game once someone chose FBNeo for it (see `shelf._stand_ins`); it is
+    # never chosen in its own right.
     games = conn.execute(
         "SELECT * FROM games WHERE is_bios = 0 AND emulator = ? ORDER BY set_name",
         (DEFAULT_EMULATOR,),
