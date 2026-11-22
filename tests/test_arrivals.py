@@ -12,10 +12,15 @@ from infiltrator.dat import DEFAULT_EMULATOR, load_dat
 A_MONTH_AGO = datetime(2026, 10, 12, 12, 0, tzinfo=UTC).timestamp()
 
 
+def sync(conn, folder, dat, meta):
+    """Sync a library whose only emulator folder is `folder`, which holds `dat`'s sets."""
+    return sync_games(conn, folder.parent, {dat.emulator: dat}, meta)
+
+
 @pytest.fixture
 def lib(tmp_path, synthetic_dat):
-    library = tmp_path / "library"
-    library.mkdir()
+    library = tmp_path / "library" / DEFAULT_EMULATOR
+    library.mkdir(parents=True)
     return library, load_dat(synthetic_dat), connect(tmp_path / "c.db")
 
 
@@ -27,7 +32,7 @@ def test_a_new_set_arrives_at_its_zip_mtime_in_utc(lib):
     library, dat, conn = lib
     zip_path = make_zip(library / "alpha.zip", chips_for("alpha"))
     os.utime(zip_path, (A_MONTH_AGO, A_MONTH_AGO))
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     assert arrived_at(conn, "alpha") == "2026-10-12T12:00:00+00:00"
 
 
@@ -35,9 +40,9 @@ def test_a_rescan_never_moves_an_arrival(lib):
     library, dat, conn = lib
     zip_path = make_zip(library / "alpha.zip", chips_for("alpha"))
     os.utime(zip_path, (A_MONTH_AGO, A_MONTH_AGO))
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     os.utime(zip_path)  # rewritten "now"
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     assert arrived_at(conn, "alpha") == "2026-10-12T12:00:00+00:00"
 
 
@@ -45,11 +50,11 @@ def test_a_game_that_leaves_and_returns_keeps_its_first_arrival(lib):
     library, dat, conn = lib
     zip_path = make_zip(library / "alpha.zip", chips_for("alpha"))
     os.utime(zip_path, (A_MONTH_AGO, A_MONTH_AGO))
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     zip_path.unlink()
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     make_zip(library / "alpha.zip", chips_for("alpha"))
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     assert arrived_at(conn, "alpha") == "2026-10-12T12:00:00+00:00"
 
 
@@ -58,7 +63,7 @@ def test_arrived_since_compares_instants_not_strings(lib):
     old = make_zip(library / "alpha.zip", chips_for("alpha"))
     os.utime(old, (A_MONTH_AGO, A_MONTH_AGO))
     make_zip(library / "delta.zip", chips_for("delta"))
-    sync_games(conn, library, dat, {})
+    sync(conn, library, dat, {})
     # Same instant as "2026-11-01T00:00:00+00:00", written in another zone.
     assert arrived_since(conn, DEFAULT_EMULATOR, "2026-10-31T20:00:00-04:00") == {"delta"}
 

@@ -82,9 +82,7 @@ def main() -> int:
         conn = connect(settings.db_path)
         report = run_sieve(settings, {DEFAULT_EMULATOR: dat}, settle_seconds=1)
         if sync_games is not None:
-            catalogued = sync_games(
-                conn, emulator_dir(settings.library_dir, DEFAULT_EMULATOR), dat, {}
-            )
+            catalogued = sync_games(conn, settings.library_dir, {DEFAULT_EMULATOR: dat}, {})
         problems = check(settings, report, catalogued)
         print(f"built: {sorted(report.new_games[DEFAULT_EMULATOR])}")
         print(f"deleted: {sorted(p.name for p in report.deleted)}")

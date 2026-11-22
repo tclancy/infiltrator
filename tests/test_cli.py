@@ -660,3 +660,15 @@ def test_a_zip_only_fbneo_can_use_is_held_and_says_so_only_when_asked(with_fbneo
     verbose = run("sieve", "-v").output
     assert f"held for fbneo: {with_fbneo / 'world.zip'}" in verbose
     assert (with_fbneo / "world.zip").exists()
+
+
+def test_fbneo_sets_in_the_library_are_catalogued_but_never_shelved_yet(with_fbneo, tv):
+    shelf, _ = tv
+    make_zip(with_fbneo.parent / "library" / "fbneo" / "fbonly.zip", fbneo_chips_for("fbonly"))
+    stock_drop(with_fbneo, "alpha")
+    assert run("rescan").output == "2 games in the library.\n"
+    run("persona", "add", "tom", input="any\n\n\n\n\nOnly In FBNeo\n")
+    result = run("play", "tom")
+    assert result.exit_code == 0, result.output
+    assert on_tv(shelf) == ["alpha"]
+    assert result.output.strip().splitlines()[-1] == "Alpha Blaster"

@@ -17,7 +17,7 @@ from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import DEFAULT_EMULATOR, Dat
 from infiltrator.dats import default_wanted, load_dats
-from infiltrator.library import emulator_dir, move_flat_library
+from infiltrator.library import move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
 from infiltrator.personas import (
@@ -86,9 +86,10 @@ def _db(settings: Settings) -> sqlite3.Connection:
     return connect(settings.db_path)
 
 
-def _sync(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> int:
-    meta = load_metadata(settings.metadata_dir, dat)
-    return sync_games(conn, emulator_dir(settings.library_dir, dat.emulator), dat, meta)
+def _sync(settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection) -> int:
+    # The metadata files are keyed by MAME names, replayed from MAME 0.78's: MAME's DAT only.
+    meta = load_metadata(settings.metadata_dir, dats[DEFAULT_EMULATOR])
+    return sync_games(conn, settings.library_dir, dats, meta)
 
 
 def _give_up(err: Exception, verbose: bool, code: int = 1) -> typer.Exit:
@@ -221,7 +222,7 @@ def sieve(verbose: Verbose = False) -> None:
             dats,
             wanted=default_wanted(dats),  # FBNeo: nothing yet; the next step asks tuning
             settle_seconds=SETTLE_SECONDS,
-            on_library_changed=lambda: _sync(settings, dat, conn),
+            on_library_changed=lambda: _sync(settings, dats, conn),
         )
     except DropFolderBusy as err:
         raise _give_up(err, verbose, BUSY_EXIT) from err
@@ -237,7 +238,7 @@ def rescan() -> None:
     """Rebuild the game list from the library."""
     settings = _settings()
     _library_ready(settings)
-    count = _sync(settings, _mame_dat(settings), _db(settings))
+    count = _sync(settings, load_dats(settings), _db(settings))
     typer.echo(f"{count} games in the library.")
 
 
