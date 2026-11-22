@@ -12,8 +12,6 @@ from infiltrator.publish import PublishResult, Target, check_folders, locked, pu
 from infiltrator.romm import RommClient
 from infiltrator.shelf import current_shelf
 
-PLATFORM = "arcade"
-
 
 def bios_needed(dat: Dat, sets: list[str]) -> list[str]:
     found = {dat.bios_of(dat.games[name]) for name in sets if name in dat.games}
@@ -80,14 +78,28 @@ def romm_client(settings: Settings) -> RommClient | None:
     return RommClient(settings.romm_url, settings.romm_token)
 
 
+def romm_platforms(settings: Settings) -> list[str]:
+    """One RomM platform per emulator with folders: named after its games folder (`mame`)."""
+    return [shelf.name for shelf, _bios in publish_folders(settings).values()]
+
+
 def tell_romm(
     settings: Settings, conn: sqlite3.Connection, client: RommClient | None = None
 ) -> None:
-    """If RomM hasn't heard about the last change, rescan and forget what left.
+    """If RomM hasn't heard about the last change, rescan each platform and forget what left.
 
-    The flag clears only on success, so a failure here is retried by the next run.
+    Every platform is tried; the flag clears only if every one succeeded, so a failure here is
+    retried by the next run. The first failure is raised once all have been tried.
     """
     client = client or romm_client(settings)
-    if client is not None and romm_pending(conn):
-        client.refresh_platform(PLATFORM)
-        set_romm_pending(conn, False)
+    if client is None or not romm_pending(conn):
+        return
+    failures = []
+    for platform in romm_platforms(settings):
+        try:
+            client.refresh_platform(platform)
+        except Exception as err:
+            failures.append(err)
+    if failures:
+        raise failures[0]
+    set_romm_pending(conn, False)

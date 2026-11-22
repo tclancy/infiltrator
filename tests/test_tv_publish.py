@@ -6,7 +6,7 @@ from conftest import chips_for, fbneo_chips_for, make_zip
 from test_personas import add_game
 
 from infiltrator.catalogue import connect
-from infiltrator.catalogue.tv import set_tv_persona
+from infiltrator.catalogue.tv import romm_pending, set_tv_persona
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, load_dat
 from infiltrator.personas import Persona, save_persona
@@ -16,11 +16,11 @@ from infiltrator.tv import bios_needed, preflight, publish_tv, shown_emulators, 
 
 
 class Spy:
-    def __init__(self, fail=False):
-        self.refreshed, self.fail = [], fail
+    def __init__(self, fail=False, failing=()):
+        self.refreshed, self.fail, self.failing = [], fail, set(failing)
 
     def refresh_platform(self, slug):
-        if self.fail:
+        if self.fail or slug in self.failing:
             raise OSError("RomM is down")
         self.refreshed.append(slug)
 
@@ -33,7 +33,8 @@ def show_on_tv(settings, dat, conn, client):
 
 @pytest.fixture
 def world(tmp_path, synthetic_dat):
-    library, shelf, bios = (tmp_path / n for n in ("library", "shelf", "bios"))
+    # The games folder's name is RomM's platform: `arcade`, as before emulators.
+    library, shelf, bios = (tmp_path / n for n in ("library", "arcade", "bios"))
     for folder in (library, shelf, bios):
         folder.mkdir()
     for name in ("alpha", "beta", "biosx"):
@@ -199,3 +200,35 @@ def test_the_tv_shows_fbneo_only_with_fbneo_folders(both):
     assert shown_emulators(mame_only) == {DEFAULT_EMULATOR}
     nothing = dataclasses.replace(mame_only, shelf_dir=None, bios_dir=None)
     assert shown_emulators(nothing) == {DEFAULT_EMULATOR}
+
+
+def test_romm_hears_once_per_emulator_on_the_platform_named_after_its_folder(both):
+    settings, dats, conn, _folders = both
+    spy = Spy()
+    published = publish_tv(settings, dats, conn)
+    assert published.changed
+    tell_romm(settings, conn, spy)
+    assert spy.refreshed == ["mame", "fbneo"]
+    assert not romm_pending(conn)
+
+
+def test_romm_still_pending_when_one_platform_fails_and_every_one_is_tried(both):
+    settings, dats, conn, _folders = both
+    publish_tv(settings, dats, conn)
+    spy = Spy(failing={"mame"})
+    with pytest.raises(OSError):
+        tell_romm(settings, conn, spy)
+    assert spy.refreshed == ["fbneo"]
+    assert romm_pending(conn)
+    retry = Spy()
+    tell_romm(settings, conn, retry)
+    assert retry.refreshed == ["mame", "fbneo"] and not romm_pending(conn)
+
+
+def test_without_fbneo_folders_romm_hears_about_mames_platform_only(both):
+    settings, dats, conn, _folders = both
+    mame_only = dataclasses.replace(settings, fbneo_shelf_dir=None, fbneo_bios_dir=None)
+    publish_tv(mame_only, dats, conn)
+    spy = Spy()
+    tell_romm(mame_only, conn, spy)
+    assert spy.refreshed == ["mame"]

@@ -134,10 +134,14 @@ def test_tune_set_by_title(home):
 
 @pytest.fixture
 def tv(home, tmp_path, monkeypatch):
-    """RomM's folders, plus a stand-in for RomM that records refreshes."""
-    shelf, bios = tmp_path / "romm-arcade", tmp_path / "romm-bios"
-    shelf.mkdir()
-    bios.mkdir()
+    """RomM's folders, plus a stand-in for RomM that records refreshes.
+
+    The games folder is named `arcade`, as on an install from before emulators: RomM's platform
+    is the folder's name.
+    """
+    shelf, bios = tmp_path / "roms" / "arcade", tmp_path / "bios" / "arcade"
+    shelf.mkdir(parents=True)
+    bios.mkdir(parents=True)
     monkeypatch.setenv("INFILTRATOR_SHELF_DIR", str(shelf))
     monkeypatch.setenv("INFILTRATOR_BIOS_DIR", str(bios))
     refreshed = []

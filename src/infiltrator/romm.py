@@ -50,24 +50,45 @@ class RommClient:
             body = json.dumps(payload).encode()
         return self.request(method, f"{self.url}{path}", headers, body)
 
-    def platform_id(self, fs_slug: str) -> int:
+    def _find_platform(self, fs_slug: str) -> int | None:
         for platform in self._call("GET", "/api/platforms"):
             if platform["fs_slug"] == fs_slug:
                 return platform["id"]
-        raise RommError(f"RomM has no {fs_slug} platform")
+        return None
 
-    def start_scan(self, platform_id: int) -> str:
-        """Queue a quick scan, waiting out one already in flight; returns its task id."""
+    def platform_id(self, fs_slug: str) -> int:
+        pid = self._find_platform(fs_slug)
+        if pid is None:
+            raise RommError(f"RomM has no {fs_slug} platform")
+        return pid
+
+    def _start(self, payload: dict) -> str:
+        """Queue a scan, waiting out one already in flight; returns its task id."""
         waited = 0.0
         while True:
             try:
-                payload = {"type": "quick", "platforms": [platform_id]}
                 return self._call("POST", "/api/tasks/scan", payload)["task_id"]
             except HTTPError as err:
                 if err.code != IN_FLIGHT or waited > self.scan_timeout:
                     raise
             self.sleep(self.poll_seconds)
             waited += self.poll_seconds
+
+    def start_scan(self, platform_id: int) -> str:
+        """Queue a quick scan of one platform; returns its task id."""
+        return self._start({"type": "quick", "platforms": [platform_id]})
+
+    def start_full_scan(self) -> str:
+        """Queue a quick scan of every folder, which is how RomM meets a new one."""
+        return self._start({"type": "quick"})
+
+    def _known_platform(self, fs_slug: str) -> int:
+        """The platform's id; a folder RomM has never scanned gets one full quick scan first."""
+        pid = self._find_platform(fs_slug)
+        if pid is not None:
+            return pid
+        self.wait_for(self.start_full_scan())
+        return self.platform_id(fs_slug)
 
     def wait_for(self, task_id: str) -> None:
         waited = 0.0
@@ -83,6 +104,6 @@ class RommClient:
 
     def refresh_platform(self, fs_slug: str) -> None:
         """Quick-scan one platform, and only once that finished, purge its missing ROMs."""
-        pid = self.platform_id(fs_slug)
+        pid = self._known_platform(fs_slug)
         self.wait_for(self.start_scan(pid))
         self._call("POST", "/api/tasks/run/cleanup_missing_roms", {"platform_ids": [pid]})
