@@ -1,7 +1,7 @@
 """infiltrator: point it at a pile of arcade files, get a shelf of games."""
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Annotated
 
@@ -16,7 +16,7 @@ from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import DEFAULT_EMULATOR, Dat
-from infiltrator.dats import load_dats
+from infiltrator.dats import default_wanted, load_dats
 from infiltrator.library import emulator_dir, move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
@@ -40,7 +40,7 @@ from infiltrator.shelf import (
     fill_shelf,
     rotate,
 )
-from infiltrator.sieve import run_sieve
+from infiltrator.sieve import SieveReport, run_sieve
 from infiltrator.tv import preflight, publish_tv, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
@@ -144,6 +144,11 @@ def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: b
             typer.echo(f"  ({type(err).__name__}: {err})")
 
 
+def _label(emulator: str, set_name: str) -> str:
+    """A set as the nerd output names it: bare for MAME 2003-Plus, as it always was."""
+    return set_name if emulator == DEFAULT_EMULATOR else f"{emulator}/{set_name}"
+
+
 def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     """One line per game, not per version: two Heavy Barrels are one new game."""
     by_family: dict[str, list[str]] = {}
@@ -152,8 +157,51 @@ def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     titles: dict[str, list[str]] = {}
     for family, names in by_family.items():
         root = dat.games.get(family) or dat.games[names[0]]
-        titles.setdefault(title(root.description), []).extend(names)
+        titles.setdefault(title(root.description), []).extend(
+            _label(dat.emulator, n) for n in names
+        )
     return titles
+
+
+def _all_new_titles(dats: Mapping[str, Dat], report: SieveReport) -> dict[str, list[str]]:
+    """New games of every emulator; one title is one line, whichever emulators it came in."""
+    titles: dict[str, list[str]] = {}
+    for emulator, names in report.new_games.items():
+        for game_title, labels in _new_titles(dats[emulator], names).items():
+            titles.setdefault(game_title, []).extend(labels)
+    return titles
+
+
+def _echo_sieved(dats: Mapping[str, Dat], report: SieveReport, verbose: bool) -> None:
+    """Titles for the person; with --verbose, every file and set the sieve touched."""
+    for game_title, names in _all_new_titles(dats, report).items():
+        line = f"New: {game_title}"
+        typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
+    if not any(report.new_games.values()):
+        typer.echo("Nothing new.")
+    rars = [p for p in report.left_alone if p.suffix.lower() == ".rar"]
+    if rars:
+        typer.echo(f"Left alone: {len(rars)} .rar file(s), not supported yet.")
+    if verbose:
+        _echo_sieve_details(report)
+
+
+def _echo_sieve_details(report: SieveReport) -> None:
+    for path in report.deleted:
+        typer.echo(f"  deleted {path}")
+    for path in report.left_alone:
+        typer.echo(f"  left alone {path}")
+    for path, emulators in report.held.items():
+        typer.echo(f"  held for {', '.join(emulators)}: {path} has chips no library set holds")
+    for emulator, names in report.new_bios.items():
+        for name in names:
+            typer.echo(f"  bios {_label(emulator, name)}")
+    for emulator, names in report.blocked.items():
+        for name in names:
+            typer.echo(
+                f"  not overwritten: {_label(emulator, name)}.zip is in the library "
+                "but isn't this set"
+            )
 
 
 @app.command()
@@ -164,12 +212,14 @@ def sieve(verbose: Verbose = False) -> None:
         _library_ready(settings)
     except Exception as err:
         raise _give_up(err, verbose) from err
-    dat = _mame_dat(settings)
+    dats = load_dats(settings)
+    dat = dats[DEFAULT_EMULATOR]
     conn = _db(settings)
     try:
         report = run_sieve(
             settings,
-            dat,
+            dats,
+            wanted=default_wanted(dats),  # FBNeo: nothing yet; the next step asks tuning
             settle_seconds=SETTLE_SECONDS,
             on_library_changed=lambda: _sync(settings, dat, conn),
         )
@@ -177,23 +227,7 @@ def sieve(verbose: Verbose = False) -> None:
         raise _give_up(err, verbose, BUSY_EXIT) from err
     except Exception as err:
         raise _give_up(err, verbose) from err
-    for game_title, names in _new_titles(dat, report.new_games).items():
-        line = f"New: {game_title}"
-        typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
-    if not report.new_games:
-        typer.echo("Nothing new.")
-    rars = [p for p in report.left_alone if p.suffix.lower() == ".rar"]
-    if rars:
-        typer.echo(f"Left alone: {len(rars)} .rar file(s), not supported yet.")
-    if verbose:
-        for path in report.deleted:
-            typer.echo(f"  deleted {path}")
-        for path in report.left_alone:
-            typer.echo(f"  left alone {path}")
-        for name in report.new_bios:
-            typer.echo(f"  bios {name}")
-        for name in report.blocked:
-            typer.echo(f"  not overwritten: {name}.zip is in the library but isn't this set")
+    _echo_sieved(dats, report, verbose)
     with _or_try_again_later(verbose):
         _sync_tv(settings, dat, conn)
 

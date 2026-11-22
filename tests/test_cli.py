@@ -2,7 +2,7 @@ import os
 import time
 
 import pytest
-from conftest import chips_for, make_zip
+from conftest import chips_for, fbneo_chips_for, make_zip
 from typer.testing import CliRunner
 
 from infiltrator import cli
@@ -636,3 +636,27 @@ def test_a_game_named_by_title_is_its_mame_2003_plus_set(home):
         (DEFAULT_EMULATOR, "alpha")
     ]
     assert tuned_sets(conn, "fbneo") == set()
+
+
+@pytest.fixture
+def with_fbneo(home, disagreeing_fbneo_dat, monkeypatch):
+    monkeypatch.setenv("INFILTRATOR_FBNEO_DAT_PATH", str(disagreeing_fbneo_dat))
+    return home
+
+
+def test_with_fbneo_configured_a_mame_zip_is_sieved_as_before(with_fbneo):
+    make_zip(with_fbneo / "alpha.zip", chips_for("alpha"))
+    result = run("sieve")
+    assert result.exit_code == 0, result.output
+    assert result.output == "New: Alpha Blaster\n"
+    library = with_fbneo.parent / "library"
+    assert sorted(p.name for p in library.iterdir()) == [DEFAULT_EMULATOR]
+    assert not (with_fbneo / "alpha.zip").exists()
+
+
+def test_a_zip_only_fbneo_can_use_is_held_and_says_so_only_when_asked(with_fbneo):
+    make_zip(with_fbneo / "world.zip", fbneo_chips_for("alpha"))
+    assert run("sieve").output == "Nothing new.\n"
+    verbose = run("sieve", "-v").output
+    assert f"held for fbneo: {with_fbneo / 'world.zip'}" in verbose
+    assert (with_fbneo / "world.zip").exists()

@@ -11,6 +11,8 @@ from infiltrator.dat import DEFAULT_EMULATOR, load_dat
 from infiltrator.safety import DropFolderError
 from infiltrator.sieve import run_sieve
 
+MAME = DEFAULT_EMULATOR
+
 
 @pytest.fixture
 def env(tmp_path, synthetic_dat):
@@ -23,12 +25,12 @@ def env(tmp_path, synthetic_dat):
         dat_path=synthetic_dat,
         metadata_dir=tmp_path / "meta",
     )
-    return settings, load_dat(synthetic_dat)
+    return settings, {MAME: load_dat(synthetic_dat)}
 
 
 def sieve(env, **kw):
-    settings, dat = env
-    return run_sieve(settings, dat, settle_seconds=0, sleep=lambda _s: None, **kw)
+    settings, dats = env
+    return run_sieve(settings, dats, settle_seconds=0, sleep=lambda _s: None, **kw)
 
 
 def members(path: Path) -> set[str]:
@@ -54,7 +56,7 @@ def test_clean_parent_is_built_and_source_deleted(env):
     settings, _ = env
     make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     report = sieve(env)
-    assert report.new_games == ["alpha"]
+    assert report.new_games == {MAME: ["alpha"]}
     assert members(mame_library(settings) / "alpha.zip") == {"a1.bin", "a2.bin"}
     assert drop_files(settings) == set()
 
@@ -90,18 +92,18 @@ def test_parent_in_library_from_earlier_run_completes_split_clone(env):
     sieve(env)
     make_zip(settings.drop_dir / "alphab.zip", {"ab3.bin": chips_for("alphab")["ab3.bin"]})
     report = sieve(env)
-    assert report.new_games == ["alphab"]
+    assert report.new_games == {MAME: ["alphab"]}
 
 
 def test_bios_game_needs_bios(env):
     settings, _ = env
     make_zip(settings.drop_dir / "beta.zip", {"b1.bin": chips_for("beta")["b1.bin"]})
-    assert sieve(env).new_games == []
+    assert sieve(env).new_games == {MAME: []}
     make_zip(settings.drop_dir / "beta.zip", {"b1.bin": chips_for("beta")["b1.bin"]})
     make_zip(settings.drop_dir / "biosx.zip", chips_for("biosx"))
     report = sieve(env)
-    assert report.new_games == ["beta"]
-    assert report.new_bios == ["biosx"]
+    assert report.new_games == {MAME: ["beta"]}
+    assert report.new_bios == {MAME: ["biosx"]}
     assert members(mame_library(settings) / "beta.zip") == {"b1.bin"}
     assert members(mame_library(settings) / "biosx.zip") == {"bx-std.bin", "bx-fix.bin"}
 
@@ -120,14 +122,14 @@ def test_clone_reaches_bios_through_parent(env):
 def test_disk_game_never_built(env):
     settings, _ = env
     make_zip(settings.drop_dir / "gamma.zip", chips_for("gamma"))
-    assert sieve(env).new_games == []
+    assert sieve(env).new_games == {MAME: []}
     assert drop_files(settings) == set()
 
 
 def test_crc_only_rom_is_matched(env):
     settings, _ = env
     make_zip(settings.drop_dir / "delta.zip", chips_for("delta"))
-    assert sieve(env).new_games == ["delta"]
+    assert sieve(env).new_games == {MAME: ["delta"]}
 
 
 def test_extra_junk_member_dropped_and_source_deleted(env):
@@ -183,7 +185,7 @@ def test_truncated_zip_left_alone_without_crash(env):
     settings, _ = env
     good = make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     good.write_bytes(good.read_bytes()[:60])
-    assert sieve(env).new_games == []
+    assert sieve(env).new_games == {MAME: []}
     assert drop_files(settings) == {"alpha.zip"}
 
 
@@ -198,7 +200,7 @@ def test_duplicate_sources_build_once_delete_both(env):
     settings, _ = env
     make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     make_zip(settings.drop_dir / "copy" / "alpha.zip", chips_for("alpha"))
-    assert sieve(env).new_games == ["alpha"]
+    assert sieve(env).new_games == {MAME: ["alpha"]}
     assert drop_files(settings) == set()
     assert not (settings.drop_dir / "copy").exists()
 
@@ -233,7 +235,7 @@ def test_rerun_is_noop_and_existing_set_not_rewritten(env):
     before = built.stat().st_mtime_ns
     make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     report = sieve(env)
-    assert report.new_games == []
+    assert report.new_games == {MAME: []}
     assert built.stat().st_mtime_ns == before
     assert drop_files(settings) == set()
 
@@ -258,7 +260,7 @@ def test_7z_and_nested_zip_are_read(env, tmp_path):
             archive.write(staging / name, name)
     inner = make_zip(tmp_path / "delta.zip", chips_for("delta"))
     make_zip(settings.drop_dir / "bundle.zip", {"delta.zip": inner.read_bytes()})
-    assert sorted(sieve(env).new_games) == ["alpha", "delta"]
+    assert sorted(sieve(env).new_games[MAME]) == ["alpha", "delta"]
     assert drop_files(settings) == set()
 
 
@@ -294,7 +296,7 @@ def test_bios_must_be_valid_not_just_present(env):
     settings, _ = env
     make_zip(mame_library(settings) / "biosx.zip", {"junk.bin": b"modern mame bios"})
     make_zip(settings.drop_dir / "beta.zip", {"b1.bin": chips_for("beta")["b1.bin"]})
-    assert sieve(env).new_games == []
+    assert sieve(env).new_games == {MAME: []}
 
 
 def test_existing_library_file_is_never_overwritten(env):
@@ -303,7 +305,7 @@ def test_existing_library_file_is_never_overwritten(env):
     before = other_core.read_bytes()
     make_zip(settings.drop_dir / "alpha.zip", chips_for("alpha"))
     report = sieve(env)
-    assert report.blocked == ["alpha"]
+    assert report.blocked == {MAME: ["alpha"]}
     assert other_core.read_bytes() == before
     assert drop_files(settings) == {"alpha.zip"}  # its chips had nowhere to go
 
@@ -338,7 +340,7 @@ def test_nested_7z_inside_zip_is_read(env, tmp_path):
         for name in chips_for("alpha"):
             archive.write(staging / name, name)
     make_zip(settings.drop_dir / "alpha.zip", {"alpha.7z": inner.read_bytes(), "readme.txt": b"hi"})
-    assert sieve(env).new_games == ["alpha"]
+    assert sieve(env).new_games == {MAME: ["alpha"]}
     assert drop_files(settings) == set()
 
 

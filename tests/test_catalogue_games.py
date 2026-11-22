@@ -88,7 +88,7 @@ def test_sieve_end_to_end_populates_games(tmp_path, synthetic_dat):
     make_zip(drop / "alpha.zip", chips_for("alpha"))
     run_sieve(
         settings,
-        dat,
+        {DEFAULT_EMULATOR: dat},
         settle_seconds=0,
         sleep=lambda _s: None,
         on_library_changed=lambda: sync_games(

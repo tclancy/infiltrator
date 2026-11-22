@@ -1,5 +1,7 @@
 """The set lists of every emulator the settings name, loaded in one place."""
 
+from collections.abc import Collection, Mapping
+
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, Dat, OptionalRoms, load_dat, load_optional_roms
 
@@ -18,3 +20,12 @@ def load_dats(settings: Settings) -> dict[str, Dat]:
             settings.fbneo_dat_path, emulator=FBNEO, optional_roms=_fbneo_optional(settings)
         )
     return dats
+
+
+Wanted = Mapping[str, Collection[str] | None]
+"""Emulator → the set names to build for it; None means every set that can be built."""
+
+
+def default_wanted(dats: Mapping[str, Dat]) -> dict[str, frozenset[str] | None]:
+    """Every MAME 2003-Plus set; no set for any other emulator until something names it."""
+    return {name: None if name == DEFAULT_EMULATOR else frozenset() for name in dats}

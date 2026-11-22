@@ -1,4 +1,4 @@
-"""Walk the drop folder and find every chip the DAT knows about."""
+"""Walk the drop folder and find every chip some emulator's DAT knows about."""
 
 import hashlib
 import io
@@ -6,7 +6,7 @@ import os
 import tempfile
 import zipfile
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -60,25 +60,37 @@ def fingerprint(data: bytes, read: Callable[[], bytes]) -> Chip:
     )
 
 
-def _known(dat: Dat, chip: Chip) -> bool:
-    return bool(dat.lookup(chip.sha1, chip.size, chip.crc))
+@dataclass(frozen=True)
+class Known:
+    """The chips worth keeping: any that at least one emulator's DAT lists."""
+
+    dats: tuple[Dat, ...]
+    sizes: frozenset[int]  # only a file of one of these sizes is worth hashing
+
+    @classmethod
+    def of(cls, dats: Iterable[Dat]) -> "Known":
+        dats = tuple(dats)
+        return cls(dats, frozenset().union(*(dat.sizes for dat in dats)))
+
+    def knows(self, chip: Chip) -> bool:
+        return any(dat.lookup(chip.sha1, chip.size, chip.crc) for dat in self.dats)
 
 
-def _zip_chips(dat: Dat, opener: Callable[[], zipfile.ZipFile]) -> tuple[list[Chip], bool]:
+def _zip_chips(known: Known, opener: Callable[[], zipfile.ZipFile]) -> tuple[list[Chip], bool]:
     chips, nested_foreign = [], False
     with opener() as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
             if Path(info.filename).suffix.lower() in ARCHIVE_SUFFIXES:
-                inner, foreign = _nested_chips(dat, opener, info.filename)
+                inner, foreign = _nested_chips(known, opener, info.filename)
                 chips.extend(inner)
                 nested_foreign = nested_foreign or foreign or not inner
                 continue
-            if info.file_size not in dat.sizes:
+            if info.file_size not in known.sizes:
                 continue
             chip = fingerprint(zf.read(info), _zip_reader(opener, info.filename))
-            if _known(dat, chip):
+            if known.knows(chip):
                 chips.append(chip)
     return chips, nested_foreign
 
@@ -92,7 +104,7 @@ def _zip_reader(opener: Callable[[], zipfile.ZipFile], member: str) -> Callable[
 
 
 def _nested_chips(
-    dat: Dat, outer: Callable[[], zipfile.ZipFile], member: str
+    known: Known, outer: Callable[[], zipfile.ZipFile], member: str
 ) -> tuple[list[Chip], bool]:
     """Chips inside an archive inside a zip, and whether it hides something foreign."""
 
@@ -103,9 +115,9 @@ def _nested_chips(
     suffix = Path(member).suffix.lower()
     try:
         if suffix == ".zip":
-            return _zip_chips(dat, lambda: zipfile.ZipFile(io.BytesIO(member_bytes())))
+            return _zip_chips(known, lambda: zipfile.ZipFile(io.BytesIO(member_bytes())))
         if suffix == ".7z":
-            return _sevenzip_chips(dat, f"{id(outer)}:{member}", member_bytes), False
+            return _sevenzip_chips(known, f"{id(outer)}:{member}", member_bytes), False
     except (*ARCHIVE_ERRORS,):
         return [], True
     return [], True  # .rar: can't look inside, so it's foreign
@@ -132,13 +144,13 @@ def _sevenzip_members(key: str, read_archive: Callable[[], bytes | Path]) -> dic
     return _SEVENZIP_CACHE[key]
 
 
-def _sevenzip_chips(dat: Dat, key: str, read_archive: Callable[[], bytes | Path]) -> list[Chip]:
+def _sevenzip_chips(known: Known, key: str, read_archive: Callable[[], bytes | Path]) -> list[Chip]:
     chips = []
     for name, data in _sevenzip_members(key, read_archive).items():
-        if len(data) not in dat.sizes:
+        if len(data) not in known.sizes:
             continue
         chip = fingerprint(data, _sevenzip_reader(key, read_archive, name))
-        if _known(dat, chip):
+        if known.knows(chip):
             chips.append(chip)
     return chips
 
@@ -152,17 +164,17 @@ def _sevenzip_reader(
     return read
 
 
-def _loose_chip(dat: Dat, path: Path) -> list[Chip]:
-    if path.stat().st_size not in dat.sizes:
+def _loose_chip(known: Known, path: Path) -> list[Chip]:
+    if path.stat().st_size not in known.sizes:
         return []
     chip = fingerprint(path.read_bytes(), path.read_bytes)
-    return [chip] if _known(dat, chip) else []
+    return [chip] if known.knows(chip) else []
 
 
 DISGUISES = {"", ".zip", ".7z"}  # where executable magic bytes mean malware, not chance
 
 
-def _scan_file(dat: Dat, path: Path) -> Source:
+def _scan_file(known: Known, path: Path) -> Source:
     if path.is_symlink():
         return Source(path, "symlink")
     if has_executable_extension(path):
@@ -172,35 +184,37 @@ def _scan_file(dat: Dat, path: Path) -> Source:
         return Source(path, "executable")
     try:
         if suffix == ".zip":
-            chips, foreign = _zip_chips(dat, lambda: zipfile.ZipFile(path))
+            chips, foreign = _zip_chips(known, lambda: zipfile.ZipFile(path))
             return Source(path, "zip", chips, foreign)
         if suffix == ".7z":
-            return Source(path, "7z", _sevenzip_chips(dat, str(path), lambda: path))
+            return Source(path, "7z", _sevenzip_chips(known, str(path), lambda: path))
     except ARCHIVE_ERRORS:
         return Source(path, "unreadable")
     if suffix == ".rar":
         return Source(path, "rar")
-    return Source(path, "loose", _loose_chip(dat, path))
+    return Source(path, "loose", _loose_chip(known, path))
 
 
-def scan_file(dat: Dat, path: Path) -> Source:
+def scan_file(known: Known, path: Path) -> Source:
     stamp = None if path.is_symlink() else stamp_of(path)
-    source = _scan_file(dat, path)
+    source = _scan_file(known, path)
     source.stamp = stamp
     return source
 
 
-def scan(drop: Path, dat: Dat) -> list[Source]:
+def scan(drop: Path, dats: Mapping[str, Dat]) -> list[Source]:
+    """Every file in the drop folder, with the chips in it that any of these DATs lists."""
     _SEVENZIP_CACHE.clear()
+    known = Known.of(dats.values())
     sources = []
     for dirpath, _dirnames, filenames in os.walk(drop, followlinks=False):
         for name in sorted(filenames):
-            sources.append(scan_file(dat, Path(dirpath) / name))
+            sources.append(scan_file(known, Path(dirpath) / name))
     return sources
 
 
-def is_judged(source: Source, dat: Dat) -> bool:
-    """Arcade-looking: the only things the sieve may rebuild from and delete.
+def is_judged(source: Source, dats: Mapping[str, Dat]) -> bool:
+    """Arcade-looking to any emulator: the only things the sieve may rebuild from and delete.
 
     An unreadable archive is never judged, even when it is named like a set: a
     stalled, preallocated download looks exactly like that, and deleting it only
@@ -210,7 +224,7 @@ def is_judged(source: Source, dat: Dat) -> bool:
         return True
     if source.kind in ("rar", "symlink", "unreadable") or source.nested_foreign:
         return False
-    named_like_set = (
-        source.path.suffix.lower() in ARCHIVE_SUFFIXES and source.path.stem in dat.games
+    named_like_set = source.path.suffix.lower() in ARCHIVE_SUFFIXES and any(
+        source.path.stem in dat.games for dat in dats.values()
     )
     return named_like_set or bool(source.chips)

@@ -80,13 +80,13 @@ def main() -> int:
         except ImportError:
             sync_games = None
         conn = connect(settings.db_path)
-        report = run_sieve(settings, dat, settle_seconds=1)
+        report = run_sieve(settings, {DEFAULT_EMULATOR: dat}, settle_seconds=1)
         if sync_games is not None:
             catalogued = sync_games(
                 conn, emulator_dir(settings.library_dir, DEFAULT_EMULATOR), dat, {}
             )
         problems = check(settings, report, catalogued)
-        print(f"built: {sorted(report.new_games)}")
+        print(f"built: {sorted(report.new_games[DEFAULT_EMULATOR])}")
         print(f"deleted: {sorted(p.name for p in report.deleted)}")
         for problem in problems:
             print(f"  - {problem}")
