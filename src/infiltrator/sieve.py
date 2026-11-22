@@ -7,6 +7,7 @@ from pathlib import Path
 
 from infiltrator.config import Settings
 from infiltrator.dat import Dat
+from infiltrator.library import emulator_dir
 from infiltrator.rebuild import ChipPool, library_chips, rebuild
 from infiltrator.safety import (
     DropFolderBusy,
@@ -81,8 +82,9 @@ def run_sieve(
     sleep: Callable[[float], None] = time.sleep,
     on_library_changed: Callable[[], None] | None = None,
 ) -> SieveReport:
-    drop, library = settings.drop_dir, settings.library_dir
-    check_drop(drop, library, settings.db_path)
+    drop = settings.drop_dir
+    check_drop(drop, settings.library_dir, settings.db_path)
+    library = emulator_dir(settings.library_dir, dat.emulator)
     reasons = active_download_reasons(drop, settle_seconds, sleep)
     if reasons:
         raise DropFolderBusy("; ".join(reasons))

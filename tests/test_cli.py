@@ -6,6 +6,7 @@ from conftest import chips_for, make_zip
 from typer.testing import CliRunner
 
 from infiltrator import cli
+from infiltrator.dat import DEFAULT_EMULATOR
 
 runner = CliRunner()
 
@@ -296,7 +297,7 @@ A_MONTH_AGO = 1_760_270_400  # 2025-10-12, long before any test runs
 
 def stock_library_long_ago(home, *names):
     """Sets that were already in the library before today, as at an upgrade."""
-    library = home.parent / "library"
+    library = home.parent / "library" / DEFAULT_EMULATOR
     for name in names:
         path = make_zip(library / f"{name}.zip", chips_for(name))
         os.utime(path, (A_MONTH_AGO, A_MONTH_AGO))
@@ -373,7 +374,7 @@ def test_a_plain_play_ends_the_demo(home, tv):
 
 
 def stock_library_hours_ago(home, hours, *names):
-    library = home.parent / "library"
+    library = home.parent / "library" / DEFAULT_EMULATOR
     when = time.time() - hours * 3600
     for name in names:
         path = make_zip(library / f"{name}.zip", chips_for(name))
@@ -570,3 +571,47 @@ def test_a_configured_fbneo_set_list_is_read_by_every_sieve(home, tmp_path, monk
     assert result.exit_code == 1
     assert "missing-fbneo.dat" in str(result.exception)
     assert (home / "alpha.zip").exists()
+
+
+def flat_library(home, *names):
+    """A library as it was before emulators: sets at the top level."""
+    library = home.parent / "library"
+    return {
+        name: make_zip(library / f"{name}.zip", chips_for(name)).stat().st_ino for name in names
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("sieve",), ("rescan",), ("play", "tom"), ("play", "tom", "--new"), ("shelf", "build", "tom")],
+)
+def test_every_library_command_first_moves_an_old_flat_library(home, command):
+    inode = flat_library(home, "alpha")["alpha"]
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run(*command)
+    assert result.exit_code == 0, result.output
+    library = home.parent / "library"
+    assert list(library.glob("*.zip")) == []
+    assert (library / DEFAULT_EMULATOR / "alpha.zip").stat().st_ino == inode
+
+
+def test_a_moved_library_is_not_rebuilt_by_the_sieve(home):
+    inode = flat_library(home, "alpha")["alpha"]
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    result = run("sieve", "-v")
+    assert result.exit_code == 0, result.output
+    assert "Nothing new." in result.output
+    assert (home.parent / "library" / DEFAULT_EMULATOR / "alpha.zip").stat().st_ino == inode
+    assert not (home / "alpha.zip").exists()
+
+
+def test_a_set_in_both_layouts_stops_the_sieve_before_it_touches_anything(home):
+    flat_library(home, "alpha")
+    make_zip(home.parent / "library" / DEFAULT_EMULATOR / "alpha.zip", {"a1.bin": b"other"})
+    make_zip(home / "delta.zip", chips_for("delta"))
+    result = run("sieve", "-v")
+    assert result.exit_code == 1
+    assert result.output.startswith("Try again later!")
+    assert "alpha.zip" in result.output  # --verbose says which
+    assert (home / "delta.zip").exists()
+    assert not (home.parent / "library" / DEFAULT_EMULATOR / "delta.zip").exists()

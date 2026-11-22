@@ -7,7 +7,7 @@ from test_personas import add_game
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.tv import set_tv_persona
 from infiltrator.config import Settings
-from infiltrator.dat import load_dat
+from infiltrator.dat import DEFAULT_EMULATOR, load_dat
 from infiltrator.personas import Persona, save_persona
 from infiltrator.shelf import build_shelf
 from infiltrator.tv import bios_needed, publish_tv, tell_romm
@@ -35,7 +35,7 @@ def world(tmp_path, synthetic_dat):
     for folder in (library, shelf, bios):
         folder.mkdir()
     for name in ("alpha", "beta", "biosx"):
-        make_zip(library / f"{name}.zip", chips_for(name))
+        make_zip(library / DEFAULT_EMULATOR / f"{name}.zip", chips_for(name))
     settings = Settings(
         drop_dir=tmp_path / "drop",
         library_dir=library,

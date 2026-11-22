@@ -17,6 +17,7 @@ from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import DEFAULT_EMULATOR, Dat
 from infiltrator.dats import load_dats
+from infiltrator.library import emulator_dir, move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
 from infiltrator.personas import (
@@ -76,13 +77,18 @@ def _mame_dat(settings: Settings) -> Dat:
     return load_dats(settings)[DEFAULT_EMULATOR]
 
 
+def _library_ready(settings: Settings) -> None:
+    """Before anything reads or writes the library: move an old flat one into place."""
+    move_flat_library(settings.library_dir)
+
+
 def _db(settings: Settings) -> sqlite3.Connection:
     return connect(settings.db_path)
 
 
 def _sync(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> int:
     meta = load_metadata(settings.metadata_dir, dat)
-    return sync_games(conn, settings.library_dir, dat, meta)
+    return sync_games(conn, emulator_dir(settings.library_dir, dat.emulator), dat, meta)
 
 
 def _give_up(err: Exception, verbose: bool, code: int = 1) -> typer.Exit:
@@ -152,6 +158,10 @@ def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
 def sieve(verbose: Verbose = False) -> None:
     """Keep the real games from the drop folder; delete the rest."""
     settings = _settings()
+    try:
+        _library_ready(settings)
+    except Exception as err:
+        raise _give_up(err, verbose) from err
     dat = _mame_dat(settings)
     conn = _db(settings)
     try:
@@ -190,6 +200,7 @@ def sieve(verbose: Verbose = False) -> None:
 def rescan() -> None:
     """Rebuild the game list from the library."""
     settings = _settings()
+    _library_ready(settings)
     count = _sync(settings, _mame_dat(settings), _db(settings))
     typer.echo(f"{count} games in the library.")
 
@@ -252,6 +263,7 @@ def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = F
     conn = _db(settings)
     who = _persona(conn, persona)
     with _or_try_again_later(verbose):
+        _library_ready(settings)
         dat = _mame_dat(settings)
         preflight(settings)
         set_tv_persona(conn, persona)
@@ -272,6 +284,7 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
     who = _persona(conn, persona)
     since = window_start(days)
     with _or_try_again_later(verbose):
+        _library_ready(settings)
         dat = _mame_dat(settings)
         preflight(settings)
         if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
@@ -289,6 +302,7 @@ def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) 
     """Around a shelf change: refuse before it if the TV can't follow, publish after it."""
     on_tv = tv_persona(conn) == persona
     with _or_try_again_later(verbose=False):
+        _library_ready(settings)
         dat = _mame_dat(settings) if on_tv else None
         if on_tv:
             preflight(settings)

@@ -7,15 +7,15 @@ from infiltrator.catalogue import connect
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.config import Settings
-from infiltrator.dat import load_dat
+from infiltrator.dat import DEFAULT_EMULATOR, load_dat
 from infiltrator.metadata import SetMeta
 from infiltrator.sieve import run_sieve
 
 
 @pytest.fixture
 def lib(tmp_path, synthetic_dat):
-    library = tmp_path / "library"
-    library.mkdir()
+    library = tmp_path / "library" / DEFAULT_EMULATOR
+    library.mkdir(parents=True)
     return library, load_dat(synthetic_dat), connect(tmp_path / "c.db")
 
 
@@ -91,7 +91,9 @@ def test_sieve_end_to_end_populates_games(tmp_path, synthetic_dat):
         dat,
         settle_seconds=0,
         sleep=lambda _s: None,
-        on_library_changed=lambda: sync_games(conn, settings.library_dir, dat, {}),
+        on_library_changed=lambda: sync_games(
+            conn, settings.library_dir / DEFAULT_EMULATOR, dat, {}
+        ),
     )
     assert row(conn, "alpha")["title"] == "Alpha Blaster"
 

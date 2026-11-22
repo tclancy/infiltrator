@@ -17,7 +17,8 @@ from pathlib import Path
 
 from infiltrator.catalogue import connect
 from infiltrator.config import Settings
-from infiltrator.dat import load_dat
+from infiltrator.dat import DEFAULT_EMULATOR, load_dat
+from infiltrator.library import emulator_dir
 from infiltrator.sieve import run_sieve
 
 EIGHT = ["hbarrelw", "congo", "zaxxon", "btimem", "popeye", "tapper", "gauntlet", "1942b"]
@@ -43,7 +44,7 @@ def fetch(drop: Path) -> None:
 
 def check(settings: Settings, report, games_in_catalogue: int | None) -> list[str]:
     problems = []
-    built = {p.stem for p in settings.library_dir.glob("*.zip")}
+    built = {p.stem for p in emulator_dir(settings.library_dir, DEFAULT_EMULATOR).glob("*.zip")}
     if built != EXPECTED_LIBRARY:
         missing, extra = EXPECTED_LIBRARY - built, built - EXPECTED_LIBRARY
         problems.append(f"library: missing {missing}, extra {extra}")
@@ -81,7 +82,9 @@ def main() -> int:
         conn = connect(settings.db_path)
         report = run_sieve(settings, dat, settle_seconds=1)
         if sync_games is not None:
-            catalogued = sync_games(conn, settings.library_dir, dat, {})
+            catalogued = sync_games(
+                conn, emulator_dir(settings.library_dir, DEFAULT_EMULATOR), dat, {}
+            )
         problems = check(settings, report, catalogued)
         print(f"built: {sorted(report.new_games)}")
         print(f"deleted: {sorted(p.name for p in report.deleted)}")
