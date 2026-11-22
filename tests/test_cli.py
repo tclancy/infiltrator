@@ -2,10 +2,11 @@ import os
 import time
 
 import pytest
-from conftest import chips_for, make_zip
+from conftest import chips_for, fbneo_chips_for, make_zip
 from typer.testing import CliRunner
 
 from infiltrator import cli
+from infiltrator.dat import DEFAULT_EMULATOR
 
 runner = CliRunner()
 
@@ -128,7 +129,7 @@ def test_tune_set_by_title(home):
     from infiltrator.catalogue.tuning import tuned_sets
     from infiltrator.config import load_settings
 
-    assert tuned_sets(connect(load_settings().db_path)) == {"alpha"}
+    assert tuned_sets(connect(load_settings().db_path), DEFAULT_EMULATOR) == {"alpha"}
 
 
 @pytest.fixture
@@ -296,7 +297,7 @@ A_MONTH_AGO = 1_760_270_400  # 2025-10-12, long before any test runs
 
 def stock_library_long_ago(home, *names):
     """Sets that were already in the library before today, as at an upgrade."""
-    library = home.parent / "library"
+    library = home.parent / "library" / DEFAULT_EMULATOR
     for name in names:
         path = make_zip(library / f"{name}.zip", chips_for(name))
         os.utime(path, (A_MONTH_AGO, A_MONTH_AGO))
@@ -373,7 +374,7 @@ def test_a_plain_play_ends_the_demo(home, tv):
 
 
 def stock_library_hours_ago(home, hours, *names):
-    library = home.parent / "library"
+    library = home.parent / "library" / DEFAULT_EMULATOR
     when = time.time() - hours * 3600
     for name in names:
         path = make_zip(library / f"{name}.zip", chips_for(name))
@@ -561,3 +562,113 @@ def test_shelf_add_of_tv_persona_changes_the_tv(home, tv):
     # alpha should be back on TV
     assert on_tv(shelf) == ["alpha", "delta"]
     assert refreshed.count("arcade") >= 2
+
+
+def test_a_configured_fbneo_set_list_is_read_by_every_sieve(home, tmp_path, monkeypatch):
+    monkeypatch.setenv("INFILTRATOR_FBNEO_DAT_PATH", str(tmp_path / "missing-fbneo.dat"))
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    result = run("sieve")
+    assert result.exit_code == 1
+    assert "missing-fbneo.dat" in str(result.exception)
+    assert (home / "alpha.zip").exists()
+
+
+def flat_library(home, *names):
+    """A library as it was before emulators: sets at the top level."""
+    library = home.parent / "library"
+    return {
+        name: make_zip(library / f"{name}.zip", chips_for(name)).stat().st_ino for name in names
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("sieve",), ("rescan",), ("play", "tom"), ("play", "tom", "--new"), ("shelf", "build", "tom")],
+)
+def test_every_library_command_first_moves_an_old_flat_library(home, command):
+    inode = flat_library(home, "alpha")["alpha"]
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run(*command)
+    assert result.exit_code == 0, result.output
+    library = home.parent / "library"
+    assert list(library.glob("*.zip")) == []
+    assert (library / DEFAULT_EMULATOR / "alpha.zip").stat().st_ino == inode
+
+
+def test_a_moved_library_is_not_rebuilt_by_the_sieve(home):
+    inode = flat_library(home, "alpha")["alpha"]
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    result = run("sieve", "-v")
+    assert result.exit_code == 0, result.output
+    assert "Nothing new." in result.output
+    assert (home.parent / "library" / DEFAULT_EMULATOR / "alpha.zip").stat().st_ino == inode
+    assert not (home / "alpha.zip").exists()
+
+
+def test_a_set_in_both_layouts_stops_the_sieve_before_it_touches_anything(home):
+    flat_library(home, "alpha")
+    make_zip(home.parent / "library" / DEFAULT_EMULATOR / "alpha.zip", {"a1.bin": b"other"})
+    make_zip(home / "delta.zip", chips_for("delta"))
+    result = run("sieve", "-v")
+    assert result.exit_code == 1
+    assert result.output.startswith("Try again later!")
+    assert "alpha.zip" in result.output  # --verbose says which
+    assert (home / "delta.zip").exists()
+    assert not (home.parent / "library" / DEFAULT_EMULATOR / "delta.zip").exists()
+
+
+def test_a_game_named_by_title_is_its_mame_2003_plus_set(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    from test_personas import add_game
+
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.issues import list_issues
+    from infiltrator.catalogue.tuning import tuned_sets
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    add_game(conn, "fbonly", emulator="fbneo", title="Only On FBNeo")
+    assert run("issue", "log", "Only On FBNeo", "--device", "s", "--note", "n").exit_code == 1
+    assert run("tune", "set", "Only On FBNeo", "--device", "s", "--settings", "x").exit_code == 1
+    assert run("issue", "log", "Alpha Blaster", "--device", "s", "--note", "n").exit_code == 0
+    assert [(r["emulator"], r["set_name"]) for r in list_issues(conn)] == [
+        (DEFAULT_EMULATOR, "alpha")
+    ]
+    assert tuned_sets(conn, "fbneo") == set()
+
+
+@pytest.fixture
+def with_fbneo(home, disagreeing_fbneo_dat, monkeypatch):
+    monkeypatch.setenv("INFILTRATOR_FBNEO_DAT_PATH", str(disagreeing_fbneo_dat))
+    return home
+
+
+def test_with_fbneo_configured_a_mame_zip_is_sieved_as_before(with_fbneo):
+    make_zip(with_fbneo / "alpha.zip", chips_for("alpha"))
+    result = run("sieve")
+    assert result.exit_code == 0, result.output
+    assert result.output == "New: Alpha Blaster\n"
+    library = with_fbneo.parent / "library"
+    assert sorted(p.name for p in library.iterdir()) == [DEFAULT_EMULATOR]
+    assert not (with_fbneo / "alpha.zip").exists()
+
+
+def test_a_zip_only_fbneo_can_use_is_held_and_says_so_only_when_asked(with_fbneo):
+    make_zip(with_fbneo / "world.zip", fbneo_chips_for("alpha"))
+    assert run("sieve").output == "Nothing new.\n"
+    verbose = run("sieve", "-v").output
+    assert f"held for fbneo: {with_fbneo / 'world.zip'}" in verbose
+    assert (with_fbneo / "world.zip").exists()
+
+
+def test_fbneo_sets_in_the_library_are_catalogued_but_never_shelved_yet(with_fbneo, tv):
+    shelf, _ = tv
+    make_zip(with_fbneo.parent / "library" / "fbneo" / "fbonly.zip", fbneo_chips_for("fbonly"))
+    stock_drop(with_fbneo, "alpha")
+    assert run("rescan").output == "2 games in the library.\n"
+    run("persona", "add", "tom", input="any\n\n\n\n\nOnly In FBNeo\n")
+    result = run("play", "tom")
+    assert result.exit_code == 0, result.output
+    assert on_tv(shelf) == ["alpha"]
+    assert result.output.strip().splitlines()[-1] == "Alpha Blaster"

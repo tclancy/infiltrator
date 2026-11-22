@@ -1,10 +1,12 @@
 """Put the TV persona's shelf in RomM's folders and tell RomM about it."""
 
 import sqlite3
+from pathlib import Path
 
 from infiltrator.catalogue.tv import romm_pending, set_romm_pending, tv_persona
 from infiltrator.config import Settings
-from infiltrator.dat import Dat
+from infiltrator.dat import DEFAULT_EMULATOR, Dat
+from infiltrator.library import emulator_dir
 from infiltrator.publish import PublishResult, check_folders, locked, publish
 from infiltrator.romm import RommClient
 from infiltrator.shelf import current_shelf
@@ -17,6 +19,11 @@ def bios_needed(dat: Dat, sets: list[str]) -> list[str]:
     return sorted(g.name for g in found if g is not None)
 
 
+def _published_sets(settings: Settings) -> Path:
+    """Only MAME 2003-Plus sets go to RomM so far, from their own library folder."""
+    return emulator_dir(settings.library_dir, DEFAULT_EMULATOR)
+
+
 def _publishing(settings: Settings) -> bool:
     return settings.shelf_dir is not None and settings.bios_dir is not None
 
@@ -24,7 +31,7 @@ def _publishing(settings: Settings) -> bool:
 def preflight(settings: Settings) -> None:
     """Raise now, before the shelf changes, if publishing would refuse later."""
     if _publishing(settings):
-        check_folders(settings.library_dir, settings.shelf_dir, settings.bios_dir)
+        check_folders(_published_sets(settings), settings.shelf_dir, settings.bios_dir)
 
 
 def publish_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> PublishResult | None:
@@ -35,7 +42,7 @@ def publish_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> Publis
     sets = [row["set_name"] for row in current_shelf(conn, persona)]
     with locked(settings.db_path.parent / "publish.lock"):
         result = publish(
-            settings.library_dir,
+            _published_sets(settings),
             settings.shelf_dir,
             settings.bios_dir,
             sets,

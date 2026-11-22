@@ -8,7 +8,7 @@ from pathlib import Path
 
 DEFAULT_CONFIG = Path("~/.config/infiltrator/config.toml").expanduser()
 PATH_KEYS = ("drop_dir", "library_dir", "db_path", "dat_path", "metadata_dir")
-OPTIONAL_PATH_KEYS = ("shelf_dir", "bios_dir")
+OPTIONAL_PATH_KEYS = ("shelf_dir", "bios_dir", "fbneo_dat_path", "fbneo_optional_path")
 TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: the environment or romm_token_file, never the TOML
 SHELF_MIN, SHELF_MAX = 6, 10
 
@@ -18,13 +18,15 @@ class Settings:
     drop_dir: Path
     library_dir: Path
     db_path: Path
-    dat_path: Path
+    dat_path: Path  # MAME 2003-Plus's set list
     metadata_dir: Path
     shelf_size: int = 8
     shelf_dir: Path | None = None  # RomM's roms/arcade: the shelf's games, nothing else
     bios_dir: Path | None = None  # RomM's bios/arcade
     romm_url: str | None = None
     romm_token: str | None = None
+    fbneo_dat_path: Path | None = None  # FBNeo's set list; FBNeo is off without it
+    fbneo_optional_path: Path | None = None  # `scripts/fbneo_optional.py`'s output
 
 
 def _read_toml(config_file: Path | None) -> dict:
@@ -60,6 +62,12 @@ def _check_romm_folders(optional: dict[str, Path]) -> None:
         raise ValueError("shelf_dir and bios_dir must be separate folders")
 
 
+def _check_fbneo(optional: dict[str, Path]) -> None:
+    """An optional-ROM list means nothing without the set list it qualifies."""
+    if "fbneo_optional_path" in optional and "fbneo_dat_path" not in optional:
+        raise ValueError("fbneo_optional_path needs fbneo_dat_path")
+
+
 def _romm_token(merged: dict, env: Mapping[str, str]) -> str | None:
     if env.get(TOKEN_ENV):
         return env[TOKEN_ENV]
@@ -80,6 +88,7 @@ def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None 
     paths = {k: Path(str(merged[k])).expanduser() for k in PATH_KEYS}
     optional = {k: Path(str(merged[k])).expanduser() for k in OPTIONAL_PATH_KEYS if k in merged}
     _check_romm_folders(optional)
+    _check_fbneo(optional)
     url = merged.get("romm_url")
     return Settings(
         **paths,

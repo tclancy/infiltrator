@@ -1,7 +1,7 @@
 """infiltrator: point it at a pile of arcade files, get a shelf of games."""
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Annotated
 
@@ -15,7 +15,9 @@ from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
-from infiltrator.dat import Dat, load_dat
+from infiltrator.dat import DEFAULT_EMULATOR, Dat
+from infiltrator.dats import default_wanted, load_dats
+from infiltrator.library import move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
 from infiltrator.personas import (
@@ -38,7 +40,7 @@ from infiltrator.shelf import (
     fill_shelf,
     rotate,
 )
-from infiltrator.sieve import run_sieve
+from infiltrator.sieve import SieveReport, run_sieve
 from infiltrator.tv import preflight, publish_tv, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
@@ -70,13 +72,24 @@ def _settings() -> Settings:
     return load_settings()
 
 
+def _mame_dat(settings: Settings) -> Dat:
+    """The MAME 2003-Plus set list: the only emulator the pipeline builds for so far."""
+    return load_dats(settings)[DEFAULT_EMULATOR]
+
+
+def _library_ready(settings: Settings) -> None:
+    """Before anything reads or writes the library: move an old flat one into place."""
+    move_flat_library(settings.library_dir)
+
+
 def _db(settings: Settings) -> sqlite3.Connection:
     return connect(settings.db_path)
 
 
-def _sync(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> int:
-    meta = load_metadata(settings.metadata_dir, dat)
-    return sync_games(conn, settings.library_dir, dat, meta)
+def _sync(settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection) -> int:
+    # The metadata files are keyed by MAME names, replayed from MAME 0.78's: MAME's DAT only.
+    meta = load_metadata(settings.metadata_dir, dats[DEFAULT_EMULATOR])
+    return sync_games(conn, settings.library_dir, dats, meta)
 
 
 def _give_up(err: Exception, verbose: bool, code: int = 1) -> typer.Exit:
@@ -117,7 +130,9 @@ def _top_up(settings: Settings, conn: sqlite3.Connection, who: Persona) -> None:
     if since is None:
         fill_shelf(conn, who, settings.shelf_size)
     else:
-        fill_demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since))
+        fill_demo_shelf(
+            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
+        )
 
 
 def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: bool) -> None:
@@ -130,6 +145,11 @@ def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: b
             typer.echo(f"  ({type(err).__name__}: {err})")
 
 
+def _label(emulator: str, set_name: str) -> str:
+    """A set as the nerd output names it: bare for MAME 2003-Plus, as it always was."""
+    return set_name if emulator == DEFAULT_EMULATOR else f"{emulator}/{set_name}"
+
+
 def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     """One line per game, not per version: two Heavy Barrels are one new game."""
     by_family: dict[str, list[str]] = {}
@@ -138,44 +158,77 @@ def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     titles: dict[str, list[str]] = {}
     for family, names in by_family.items():
         root = dat.games.get(family) or dat.games[names[0]]
-        titles.setdefault(title(root.description), []).extend(names)
+        titles.setdefault(title(root.description), []).extend(
+            _label(dat.emulator, n) for n in names
+        )
     return titles
+
+
+def _all_new_titles(dats: Mapping[str, Dat], report: SieveReport) -> dict[str, list[str]]:
+    """New games of every emulator; one title is one line, whichever emulators it came in."""
+    titles: dict[str, list[str]] = {}
+    for emulator, names in report.new_games.items():
+        for game_title, labels in _new_titles(dats[emulator], names).items():
+            titles.setdefault(game_title, []).extend(labels)
+    return titles
+
+
+def _echo_sieved(dats: Mapping[str, Dat], report: SieveReport, verbose: bool) -> None:
+    """Titles for the person; with --verbose, every file and set the sieve touched."""
+    for game_title, names in _all_new_titles(dats, report).items():
+        line = f"New: {game_title}"
+        typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
+    if not any(report.new_games.values()):
+        typer.echo("Nothing new.")
+    rars = [p for p in report.left_alone if p.suffix.lower() == ".rar"]
+    if rars:
+        typer.echo(f"Left alone: {len(rars)} .rar file(s), not supported yet.")
+    if verbose:
+        _echo_sieve_details(report)
+
+
+def _echo_sieve_details(report: SieveReport) -> None:
+    for path in report.deleted:
+        typer.echo(f"  deleted {path}")
+    for path in report.left_alone:
+        typer.echo(f"  left alone {path}")
+    for path, emulators in report.held.items():
+        typer.echo(f"  held for {', '.join(emulators)}: {path} has chips no library set holds")
+    for emulator, names in report.new_bios.items():
+        for name in names:
+            typer.echo(f"  bios {_label(emulator, name)}")
+    for emulator, names in report.blocked.items():
+        for name in names:
+            typer.echo(
+                f"  not overwritten: {_label(emulator, name)}.zip is in the library "
+                "but isn't this set"
+            )
 
 
 @app.command()
 def sieve(verbose: Verbose = False) -> None:
     """Keep the real games from the drop folder; delete the rest."""
     settings = _settings()
-    dat = load_dat(settings.dat_path)
+    try:
+        _library_ready(settings)
+    except Exception as err:
+        raise _give_up(err, verbose) from err
+    dats = load_dats(settings)
+    dat = dats[DEFAULT_EMULATOR]
     conn = _db(settings)
     try:
         report = run_sieve(
             settings,
-            dat,
+            dats,
+            wanted=default_wanted(dats),  # FBNeo: nothing yet; the next step asks tuning
             settle_seconds=SETTLE_SECONDS,
-            on_library_changed=lambda: _sync(settings, dat, conn),
+            on_library_changed=lambda: _sync(settings, dats, conn),
         )
     except DropFolderBusy as err:
         raise _give_up(err, verbose, BUSY_EXIT) from err
     except Exception as err:
         raise _give_up(err, verbose) from err
-    for game_title, names in _new_titles(dat, report.new_games).items():
-        line = f"New: {game_title}"
-        typer.echo(f"{line}  [{', '.join(names)}]" if verbose else line)
-    if not report.new_games:
-        typer.echo("Nothing new.")
-    rars = [p for p in report.left_alone if p.suffix.lower() == ".rar"]
-    if rars:
-        typer.echo(f"Left alone: {len(rars)} .rar file(s), not supported yet.")
-    if verbose:
-        for path in report.deleted:
-            typer.echo(f"  deleted {path}")
-        for path in report.left_alone:
-            typer.echo(f"  left alone {path}")
-        for name in report.new_bios:
-            typer.echo(f"  bios {name}")
-        for name in report.blocked:
-            typer.echo(f"  not overwritten: {name}.zip is in the library but isn't this set")
+    _echo_sieved(dats, report, verbose)
     with _or_try_again_later(verbose):
         _sync_tv(settings, dat, conn)
 
@@ -184,7 +237,8 @@ def sieve(verbose: Verbose = False) -> None:
 def rescan() -> None:
     """Rebuild the game list from the library."""
     settings = _settings()
-    count = _sync(settings, load_dat(settings.dat_path), _db(settings))
+    _library_ready(settings)
+    count = _sync(settings, load_dats(settings), _db(settings))
     typer.echo(f"{count} games in the library.")
 
 
@@ -246,7 +300,8 @@ def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = F
     conn = _db(settings)
     who = _persona(conn, persona)
     with _or_try_again_later(verbose):
-        dat = load_dat(settings.dat_path)
+        _library_ready(settings)
+        dat = _mame_dat(settings)
         preflight(settings)
         set_tv_persona(conn, persona)
         fill_shelf(conn, who, settings.shelf_size)
@@ -266,9 +321,12 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
     who = _persona(conn, persona)
     since = window_start(days)
     with _or_try_again_later(verbose):
-        dat = load_dat(settings.dat_path)
+        _library_ready(settings)
+        dat = _mame_dat(settings)
         preflight(settings)
-        if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
+        if not demo_shelf(
+            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
+        ):
             typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
             return
         set_tv_persona(conn, persona)
@@ -283,7 +341,8 @@ def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) 
     """Around a shelf change: refuse before it if the TV can't follow, publish after it."""
     on_tv = tv_persona(conn) == persona
     with _or_try_again_later(verbose=False):
-        dat = load_dat(settings.dat_path) if on_tv else None
+        _library_ready(settings)
+        dat = _mame_dat(settings) if on_tv else None
         if on_tv:
             preflight(settings)
         yield
@@ -328,9 +387,15 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
 
+def _mame_titles(conn: sqlite3.Connection) -> dict[str, str]:
+    """Set name → title, for the MAME 2003-Plus sets: the only ones a shelf holds so far."""
+    rows = conn.execute("SELECT set_name, title FROM games WHERE emulator = ?", (DEFAULT_EMULATOR,))
+    return {r["set_name"]: r["title"] for r in rows}
+
+
 def _echo_moves(conn: sqlite3.Connection, out: list[str], incoming: list[str]) -> None:
     """One line per game that left or arrived, by title."""
-    titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
+    titles = _mame_titles(conn)
     for name in out:
         typer.echo(f"Out: {titles.get(name, name)}")
     for name in incoming:
@@ -362,10 +427,12 @@ def shelf_add(persona: str, title: str) -> None:
 
 
 def _set_for_title(conn: sqlite3.Connection, game_title: str) -> str | None:
+    """The MAME 2003-Plus set a person means by this title: shelved, then parent, then name."""
     rows = conn.execute(
-        "SELECT g.set_name, g.parent, EXISTS(SELECT 1 FROM shelf s WHERE s.set_name = g.set_name) "
-        "AS shelved FROM games g WHERE g.title = ? COLLATE NOCASE",
-        (game_title,),
+        "SELECT g.set_name, g.parent, EXISTS(SELECT 1 FROM shelf s "
+        "WHERE s.emulator = g.emulator AND s.set_name = g.set_name) AS shelved "
+        "FROM games g WHERE g.emulator = ? AND g.title = ? COLLATE NOCASE",
+        (DEFAULT_EMULATOR, game_title),
     ).fetchall()
     if not rows:
         return None
@@ -384,16 +451,17 @@ def issue_log(
     if set_name is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
-    log_issue(conn, set_name, device, note)
+    log_issue(conn, DEFAULT_EMULATOR, set_name, device, note)
     typer.echo("Noted.")
 
 
 @issue_app.command("list")
 def issue_list(verbose: Verbose = False) -> None:
     conn = _db(_settings())
-    titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
+    rows = conn.execute("SELECT emulator, set_name, title FROM games")
+    titles = {(r["emulator"], r["set_name"]): r["title"] for r in rows}
     for row in list_issues(conn):
-        name = titles.get(row["set_name"], row["set_name"])
+        name = titles.get((row["emulator"], row["set_name"]), row["set_name"])
         extra = f" [{row['set_name']}]" if verbose else ""
         typer.echo(f"{row['at'][:10]}  {name}{extra} on {row['device']}: {row['note']}")
 
@@ -410,5 +478,5 @@ def tune_set(
     if set_name is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
-    set_tuning(conn, set_name, device, settings)
+    set_tuning(conn, DEFAULT_EMULATOR, set_name, device, settings)
     typer.echo("Saved.")

@@ -506,3 +506,40 @@ def test_a_title_nobody_has_is_refused_by_both(conn):
         with pytest.raises(LookupError):
             change()
     assert conn.execute("SELECT COUNT(*) FROM shelf_drops").fetchone()[0] == 0
+
+
+def test_an_fbneo_set_with_a_shelved_sets_name_is_not_mistaken_for_it(conn):
+    add_game(conn, "alpha", title="Alpha Blaster")
+    add_game(conn, "alpha", emulator="fbneo", title="Alpha Blaster (FBNeo)", quality_tier=9)
+    build_shelf(conn, P(conn, "tom"), 6, now=clock())
+    shelf = current_shelf(conn, "tom")
+    assert [(g["emulator"], g["title"]) for g in shelf] == [("mame2003-plus", "Alpha Blaster")]
+
+
+def test_shelf_moves_are_recorded_as_mame_2003_plus(conn):
+    stock(conn, 2)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    drop(conn, tom, "Game00", now=tick)
+    found = conn.execute("SELECT emulator, action FROM shelf_history ORDER BY id").fetchall()
+    assert [tuple(r) for r in found] == [("mame2003-plus", "on")] * 2 + [("mame2003-plus", "off")]
+    shelved = {r["emulator"] for r in conn.execute("SELECT emulator FROM shelf")}
+    assert shelved == {"mame2003-plus"}
+
+
+def test_a_shelf_row_for_another_emulator_is_left_alone_by_a_rebuild(conn):
+    stock(conn, 2)
+    tom = P(conn, "tom")
+    with conn:
+        conn.execute(
+            "INSERT INTO shelf (persona, emulator, set_name, placed_at) "
+            "VALUES ('tom', 'fbneo', 'game00', 'then')"
+        )
+    build_shelf(conn, tom, 6, now=clock())
+    found = conn.execute("SELECT emulator, set_name FROM shelf ORDER BY 1, 2").fetchall()
+    assert [tuple(r) for r in found] == [
+        ("fbneo", "game00"),
+        ("mame2003-plus", "game00"),
+        ("mame2003-plus", "game01"),
+    ]

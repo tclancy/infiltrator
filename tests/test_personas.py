@@ -1,6 +1,7 @@
 import pytest
 
 from infiltrator.catalogue import connect
+from infiltrator.dat import DEFAULT_EMULATOR
 from infiltrator.personas import SPINNERS, Persona, eligible, load_persona, save_persona
 
 
@@ -104,7 +105,7 @@ def test_tuned_game_is_playable_despite_listed_control(conn):
 
     add_game(conn, "hbarrelw", control="dial", title="Heavy Barrel")
     assert eligible(conn, Persona("tom")) == []
-    set_tuning(conn, "hbarrelw", "sabrina", 'input_libretro_device_p1 = "3"')
+    set_tuning(conn, DEFAULT_EMULATOR, "hbarrelw", "sabrina", 'input_libretro_device_p1 = "3"')
     assert names(eligible(conn, Persona("tom"))) == ["hbarrelw"]
 
 
@@ -112,5 +113,24 @@ def test_tuning_does_not_override_one_handed(conn):
     from infiltrator.catalogue.tuning import set_tuning
 
     add_game(conn, "hbarrelw", control="dial", buttons=2, a11y_one_button=0)
-    set_tuning(conn, "hbarrelw", "sabrina", "remap")
+    set_tuning(conn, DEFAULT_EMULATOR, "hbarrelw", "sabrina", "remap")
     assert eligible(conn, Persona("tom", one_handed=True)) == []
+
+
+def test_tuning_an_fbneo_set_does_not_make_the_mame_set_of_that_name_playable(conn):
+    from infiltrator.catalogue.tuning import set_tuning
+
+    add_game(conn, "hbarrelw", control="dial", title="Heavy Barrel")
+    set_tuning(conn, "fbneo", "hbarrelw", "sabrina", "remap")
+    assert eligible(conn, Persona("tom")) == []
+
+
+def test_only_mame_2003_plus_sets_are_eligible_for_now(conn):
+    # FBNeo rows carry no language, players or controls yet; the next step decides when
+    # an FBNeo set may stand in for its game.
+    add_game(conn, "hbarrel", emulator="fbneo", family="hbarrel", title="Heavy Barrel")
+    add_game(conn, "hbarrelw", title="Heavy Barrel")
+    persona = Persona("tom", language=None, must_haves=("Heavy Barrel",))
+    found = eligible(conn, persona)
+    assert [(g["emulator"], g["set_name"]) for g in found] == [(DEFAULT_EMULATOR, "hbarrelw")]
+    assert eligible(conn, persona, ignore_drops=True) == found

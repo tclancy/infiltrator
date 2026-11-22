@@ -5,6 +5,7 @@ fixtures can be generated at test time and nothing is forged or committed.
 """
 
 import hashlib
+import json
 import zipfile
 import zlib
 from pathlib import Path
@@ -25,6 +26,11 @@ CHIPS = {
     "bb2": 48,
     "g1": 80,
     "d1": 40,
+    # Chips only FBNeo's list names (see FBNEO_DISAGREEING). Their sizes are ones MAME's list
+    # has no chip of, so a scan that hashed only MAME's sizes would never see them.
+    "aw2": 200,
+    "aprom": 16,
+    "fb1": 72,
 }
 
 # (set, attrs, roms, extra xml). Each rom: (name, label|None, extra attrs).
@@ -169,7 +175,7 @@ def _rom_xml_fbneo(name: str, label: str | None, extra: dict) -> str:
     return f"<rom {body}/>"
 
 
-def fbneo_dat_xml() -> str:
+def fbneo_dat_xml(games: list = GAMES) -> str:
     """Generate a FBNeo-format DAT with isbios attribute."""
     parts = [
         '<?xml version="1.0"?>',
@@ -182,7 +188,7 @@ def fbneo_dat_xml() -> str:
         "<version>1.0</version>",
         "</header>",
     ]
-    for name, attrs, roms, _extra in GAMES:
+    for name, attrs, roms, _extra in games:
         game_attrs = {"name": name}
         # Map MAME attributes to FBNeo
         if "runnable" in attrs and attrs["runnable"] == "no":
@@ -214,4 +220,74 @@ def synthetic_dat(tmp_path) -> Path:
 def synthetic_fbneo_dat(tmp_path) -> Path:
     path = tmp_path / "fbneo.xml"
     path.write_text(fbneo_dat_xml())
+    return path
+
+
+# FBNeo's list where it disagrees with MAME 2003-Plus's, as it does over Heavy Barrel:
+# - `alpha` is a name both lists use for different contents (here FBNeo's needs aw2, a chip
+#   MAME's list has never heard of, where MAME's needs a2);
+# - `alphaua` is MAME's `alpha` under another set name and other ROM names, plus a PROM FBNeo
+#   can run without (FBNEO_OPTIONAL);
+# - `biosx` is a BIOS here too, and `betafb` needs it; `fbonly` is a game only FBNeo has.
+FBNEO_DISAGREEING = [
+    (
+        "alpha",
+        {"description": "Alpha Blaster (World)"},
+        [("a1.bin", "a1", {}), ("aw2.bin", "aw2", {})],
+        "",
+    ),
+    (
+        "alphaua",
+        {"description": "Alpha Blaster (US)", "cloneof": "alpha", "romof": "alpha"},
+        [
+            ("ua-1.rom", "a1", {"merge": "a1.bin"}),
+            ("ua-2.rom", "a2", {}),
+            ("ua-prom.bin", "aprom", {}),
+        ],
+        "",
+    ),
+    (
+        "biosx",
+        {"description": "BIOS X", "runnable": "no"},
+        [("bx-std.bin", "bx-std", {}), ("bx-fix.bin", "bx-fix", {})],
+        "",
+    ),
+    (
+        "betafb",
+        {"description": "Beta Force (FBNeo)", "romof": "biosx"},
+        [
+            ("bx-std.bin", "bx-std", {"merge": "bx-std.bin"}),
+            ("bx-fix.bin", "bx-fix", {"merge": "bx-fix.bin"}),
+            ("fb-b1.bin", "b1", {}),
+        ],
+        "",
+    ),
+    ("fbonly", {"description": "Only In FBNeo"}, [("fbo.bin", "fb1", {})], ""),
+]
+FBNEO_OPTIONAL = {"alphaua": ["aprom"]}  # set -> labels of the ROMs it can run without
+
+
+def fbneo_chips_for(set_name: str) -> dict[str, bytes]:
+    """Every chip an FBNEO_DISAGREEING set lists, keyed by FBNeo's member names."""
+    for name, _attrs, roms, _extra in FBNEO_DISAGREEING:
+        if name == set_name:
+            return {rom: label_bytes(label) for rom, label, _x in roms}
+    raise KeyError(set_name)
+
+
+@pytest.fixture
+def disagreeing_fbneo_dat(tmp_path) -> Path:
+    path = tmp_path / "fbneo-disagreeing.dat"
+    path.write_text(fbneo_dat_xml(FBNEO_DISAGREEING))
+    return path
+
+
+@pytest.fixture
+def fbneo_optional_json(tmp_path) -> Path:
+    path = tmp_path / "fbneo-optional.json"
+    crcs = {
+        name: [f"{zlib.crc32(label_bytes(label)):08x}" for label in labels]
+        for name, labels in FBNEO_OPTIONAL.items()
+    }
+    path.write_text(json.dumps(crcs))
     return path

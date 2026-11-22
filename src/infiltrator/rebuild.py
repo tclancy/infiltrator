@@ -1,13 +1,19 @@
-"""Write complete, self-contained (non-merged) sets from a pool of verified chips."""
+"""Write complete, self-contained (non-merged) sets from a pool of verified chips.
+
+Each emulator's sets go to its own library folder. The pool is shared: a chip is one chip
+whichever emulator's DAT names it, so FBNeo sets can be made from chips MAME sets hold.
+"""
 
 import hashlib
 import os
 import zipfile
 import zlib
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from infiltrator.dat import ChipKey, Dat, Game, Rom
+from infiltrator.dat import IS_BIOS, ChipKey, Dat, Game, Rom
+from infiltrator.library import emulator_dir
 from infiltrator.scan import Chip, fingerprint
 
 
@@ -22,6 +28,8 @@ class RebuildResult:
 
 
 class ChipPool:
+    """Chips by SHA-1 (how MAME 2003-Plus names a ROM) and by size and CRC (how FBNeo does)."""
+
     def __init__(self) -> None:
         self._by_key: dict[ChipKey, Chip] = {}
 
@@ -33,10 +41,15 @@ class ChipPool:
         return self._by_key.get(rom.key)
 
 
+def _library_zips(library: Path) -> Iterator[Path]:
+    for emulator in IS_BIOS:
+        yield from sorted(emulator_dir(library, emulator).glob("*.zip"))
+
+
 def library_chips(library: Path) -> list[Chip]:
-    """Every member of every library zip, so earlier runs' parents and BIOSes count."""
+    """Every member of every zip in every emulator's folder, so earlier runs' sets count."""
     chips = []
-    for path in sorted(library.glob("*.zip")):
+    for path in _library_zips(library):
         try:
             with zipfile.ZipFile(path) as zf:
                 for name in zf.namelist():
@@ -55,6 +68,7 @@ def _reader(path: Path, member: str):
 
 
 def _matches(rom: Rom, data: bytes) -> bool:
+    """By SHA-1 when the DAT gives one; FBNeo's never does, so by size and CRC."""
     if rom.sha1:
         return hashlib.sha1(data).hexdigest() == rom.sha1
     return len(data) == rom.size and f"{zlib.crc32(data):08x}" == rom.crc
@@ -95,7 +109,7 @@ def _write_set(path: Path, roms: tuple[Rom, ...], pool: ChipPool) -> None:
 
 
 def bios_ready(game: Game, dat: Dat, library: Path) -> bool:
-    """A game that needs a BIOS only counts if that BIOS is in the library and valid."""
+    """A game that needs a BIOS only counts if that BIOS is in its emulator's folder and valid."""
     bios = dat.bios_of(game)
     if bios is None:
         return True
@@ -108,21 +122,70 @@ def _buildable(game: Game, dat: Dat, pool: ChipPool, library: Path) -> bool:
     return all(pool.find(r) for r in dat.required_roms(game))
 
 
-def rebuild(pool: ChipPool, dat: Dat, library: Path) -> RebuildResult:
-    library.mkdir(parents=True, exist_ok=True)
+def _candidates(dat: Dat, wanted: Collection[str] | None) -> list[Game]:
+    """The games to try, BIOS sets first: all of them, or the wanted ones and their BIOSes."""
+    if wanted is None:
+        games = list(dat.games.values())
+    else:
+        unknown = sorted(set(wanted) - set(dat.games))
+        if unknown:
+            raise ValueError(f"not in the {dat.emulator} set list: {', '.join(unknown)}")
+        games = [dat.games[name] for name in wanted]
+        games += [bios for bios in map(dat.bios_of, games) if bios is not None]
+    return sorted(set(games), key=lambda g: (not g.is_bios, g.name))
+
+
+def _optional_present(game: Game, dat: Dat, pool: ChipPool) -> tuple[Rom, ...]:
+    """The ROMs this set can run without that the pool holds anyway: worth putting in."""
+    return tuple(
+        rom
+        for rom in game.roms
+        if rom.optional
+        and rom.status != "nodump"
+        and not dat.is_bios_held(game, rom)
+        and pool.find(rom)
+    )
+
+
+def _contents(game: Game, dat: Dat, pool: ChipPool) -> tuple[Rom, ...]:
+    """What goes in the zip: every required ROM, then any optional one the pool holds."""
+    by_name = {rom.name: rom for rom in dat.required_roms(game)}
+    for rom in _optional_present(game, dat, pool):
+        by_name.setdefault(rom.name, rom)
+    return tuple(by_name.values())
+
+
+def rebuild_emulator(
+    pool: ChipPool, dat: Dat, folder: Path, wanted: Collection[str] | None = None
+) -> RebuildResult:
+    """Build this emulator's sets into its folder: every buildable one, or only the wanted."""
     result = RebuildResult()
-    ordered = sorted(dat.games.values(), key=lambda g: (not g.is_bios, g.name))
-    for game in ordered:
-        if not _buildable(game, dat, pool, library):
+    candidates = _candidates(dat, wanted)
+    if candidates:
+        folder.mkdir(parents=True, exist_ok=True)
+    for game in candidates:
+        if not _buildable(game, dat, pool, folder):
             continue
-        roms = dat.required_roms(game)
-        target = library / f"{game.name}.zip"
+        target = folder / f"{game.name}.zip"
         if target.exists() or target.is_symlink():
-            if set_is_valid(target, roms):
+            if set_is_valid(target, dat.required_roms(game)):
                 result.already_present.append(game.name)
             else:
                 result.blocked.append(game.name)
             continue
-        _write_set(target, roms, pool)
+        _write_set(target, _contents(game, dat, pool), pool)
         result.built.append(game.name)
     return result
+
+
+def rebuild(
+    pool: ChipPool,
+    dats: Mapping[str, Dat],
+    library: Path,
+    wanted: Mapping[str, Collection[str] | None],
+) -> dict[str, RebuildResult]:
+    """Each wanted emulator's sets into `library/<emulator>/`, in the order `wanted` names them."""
+    return {
+        emulator: rebuild_emulator(pool, dats[emulator], emulator_dir(library, emulator), names)
+        for emulator, names in wanted.items()
+    }

@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from infiltrator.catalogue import utcnow
+from infiltrator.dat import DEFAULT_EMULATOR
 from infiltrator.personas import Persona, eligible, is_must_have
 
 
@@ -33,8 +34,8 @@ def pick_one_per_family(rows: list[sqlite3.Row], p: Persona) -> list[sqlite3.Row
 def last_shelved(conn: sqlite3.Connection, persona: str) -> dict[str, str]:
     rows = conn.execute(
         "SELECT set_name, MAX(at) AS at FROM shelf_history "
-        "WHERE persona = ? AND action = 'on' GROUP BY set_name",
-        (persona,),
+        "WHERE persona = ? AND emulator = ? AND action = 'on' GROUP BY set_name",
+        (persona, DEFAULT_EMULATOR),
     )
     return {r["set_name"]: r["at"] for r in rows}
 
@@ -56,34 +57,44 @@ def _ranked(conn: sqlite3.Connection, p: Persona) -> list[sqlite3.Row]:
 
 def current_shelf(conn: sqlite3.Connection, persona: str) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT g.*, s.placed_at FROM shelf s JOIN games g USING (set_name) "
+        "SELECT g.*, s.placed_at FROM shelf s "
+        "JOIN games g ON g.emulator = s.emulator AND g.set_name = s.set_name "
         "WHERE s.persona = ? ORDER BY g.title",
         (persona,),
     ).fetchall()
 
 
 def _replace_shelf(conn: sqlite3.Connection, persona: str, wanted: list[str], now: str) -> None:
-    before = {
-        r["set_name"]
-        for r in conn.execute("SELECT set_name FROM shelf WHERE persona = ?", (persona,))
-    }
+    """Make the persona's shelf hold exactly these MAME 2003-Plus sets, logging each move."""
+    emu = DEFAULT_EMULATOR
+    rows = conn.execute(
+        "SELECT set_name FROM shelf WHERE persona = ? AND emulator = ?", (persona, emu)
+    )
+    before = {r["set_name"] for r in rows}
     after = set(wanted)
     with conn:
         for name in sorted(before - after):
-            conn.execute("DELETE FROM shelf WHERE persona = ? AND set_name = ?", (persona, name))
             conn.execute(
-                "INSERT INTO shelf_history (persona, set_name, action, at) VALUES (?, ?, 'off', ?)",
-                (persona, name, now),
+                "DELETE FROM shelf WHERE persona = ? AND emulator = ? AND set_name = ?",
+                (persona, emu, name),
             )
+            _log_move(conn, persona, emu, name, "off", now)
         for name in sorted(after - before):
             conn.execute(
-                "INSERT INTO shelf (persona, set_name, placed_at) VALUES (?, ?, ?)",
-                (persona, name, now),
+                "INSERT INTO shelf (persona, emulator, set_name, placed_at) VALUES (?, ?, ?, ?)",
+                (persona, emu, name, now),
             )
-            conn.execute(
-                "INSERT INTO shelf_history (persona, set_name, action, at) VALUES (?, ?, 'on', ?)",
-                (persona, name, now),
-            )
+            _log_move(conn, persona, emu, name, "on", now)
+
+
+def _log_move(
+    conn: sqlite3.Connection, persona: str, emulator: str, set_name: str, action: str, now: str
+) -> None:
+    conn.execute(
+        "INSERT INTO shelf_history (persona, emulator, set_name, action, at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (persona, emulator, set_name, action, now),
+    )
 
 
 def build_shelf(

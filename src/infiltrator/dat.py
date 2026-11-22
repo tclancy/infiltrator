@@ -66,6 +66,10 @@ IS_BIOS: dict[str, Callable[[ET.Element], bool]] = {
 }
 """How each emulator's DAT marks a BIOS set. Its keys are the emulators Infiltrator knows."""
 
+DEFAULT_EMULATOR = "mame2003-plus"
+"""Where every game runs unless something says otherwise, and what older records meant."""
+FBNEO = "fbneo"
+
 
 def _known(emulator: str) -> str:
     if emulator not in IS_BIOS:
@@ -124,7 +128,7 @@ def _game(
 
 
 class Dat:
-    def __init__(self, games: dict[str, Game], emulator: str = "mame2003-plus"):
+    def __init__(self, games: dict[str, Game], emulator: str = DEFAULT_EMULATOR):
         self.emulator = _known(emulator)
         self.games = games
         self._index: dict[ChipKey, list[tuple[Game, Rom]]] = defaultdict(list)
@@ -214,7 +218,7 @@ def load_optional_roms(path: Path) -> dict[str, frozenset[str]]:
 
 
 def load_dat(
-    path: Path, emulator: str = "mame2003-plus", optional_roms: OptionalRoms | None = None
+    path: Path, emulator: str = DEFAULT_EMULATOR, optional_roms: OptionalRoms | None = None
 ) -> Dat:
     is_bios = IS_BIOS[_known(emulator)]
     games = {}
