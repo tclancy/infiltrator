@@ -19,14 +19,16 @@ import re
 import sys
 from pathlib import Path
 
+_STRING_OR_COMMENT = re.compile(r'"(?:\\.|[^"\\\n])*"|/\*.*?\*/|//[^\n]*', re.DOTALL)
+
 
 def strip_comments(text: str) -> str:
-    """Remove // and /* */ comments from C++ code."""
-    # Remove line comments
-    text = re.sub(r"//[^\n]*", "", text)
-    # Remove block comments
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    return text
+    """Remove // and /* */ comments from C++ code, whichever opens first, leaving strings alone.
+
+    One pass in source order: a `//` inside a block comment must not eat that comment's `*/`,
+    and comment markers inside a string literal are not comments.
+    """
+    return _STRING_OR_COMMENT.sub(lambda m: m[0] if m[0].startswith('"') else " ", text)
 
 
 def find_rom_tables(text: str) -> list[dict]:

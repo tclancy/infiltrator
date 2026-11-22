@@ -23,6 +23,19 @@ class TestCommentStripping:
         assert "x = 5" in result
         assert "y = 6" in result
 
+    def test_a_line_comment_marker_inside_a_block_comment_does_not_eat_its_end(self):
+        # Seen in FBNeo's Neo Geo driver: this used to swallow every driver up to the next `*/`.
+        code = "a = 1; /* see // the notes */ b = 2;\nc = 3; /* later */ d = 4;"
+        result = fbneo_optional.strip_comments(code)
+        assert "b = 2" in result and "c = 3" in result and "d = 4" in result
+        assert "notes" not in result and "later" not in result
+
+    def test_comment_markers_inside_a_string_are_kept(self):
+        code = 'url = "http://example.com/*x*/"; // gone'
+        result = fbneo_optional.strip_comments(code)
+        assert '"http://example.com/*x*/"' in result
+        assert "gone" not in result
+
     def test_strip_block_comments(self):
         code = "x = 5; /* block comment */ y = 6;"
         result = fbneo_optional.strip_comments(code)
