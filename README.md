@@ -32,10 +32,12 @@ metadata_dir = "~/infiltrator/metadata"
 shelf_size = 8                          # 6 to 10
 
 # Optional: put a shelf on a RomM server's TV list. These are MAME 2003-Plus's folders.
-shelf_dir = "/mnt/samsungusb/games/romm/library/roms/mame"  # holds only the shelf
+shelf_dir = "/mnt/samsungusb/games/romm/library/roms/mame"  # the shelf, or the library
 bios_dir = "/mnt/samsungusb/games/romm/library/bios/mame"
 romm_url = "http://localhost:7767"
 romm_token_file = "~/.config/infiltrator/romm-token"   # chmod 600
+# Optional: the whole library in RomM, with the shelf as this collection (see "The TV").
+romm_collection = "On the shelf"                       # needs romm_url and the token
 
 # Optional: FBNeo's set list, so a game can be switched to FBNeo.
 fbneo_dat_path = "~/infiltrator/fbneo-arcade.dat"
@@ -47,7 +49,9 @@ fbneo_bios_dir = "/mnt/samsungusb/games/romm/library/bios/fbneo"
 
 The RomM token is a secret, so it never goes in this file: it is read from
 `romm_token_file`, or from `INFILTRATOR_ROMM_TOKEN`, which wins. Make one in RomM under Settings → Client API Tokens with "View platforms" and
-"Run tasks".
+"Run tasks". With `romm_collection` set it also needs "View ROMs", "View collections" and
+"Modify collections"; until it has them, RomM's folders are kept up to date but the
+collection isn't, and you'll see `The TV will catch up shortly.`
 
 - **`dat_path`** is the MAME 2003-Plus game list from the
   [core's repo](https://github.com/libretro/mame2003-plus-libretro).
@@ -107,7 +111,8 @@ Add `--verbose` to `sieve`, `play` or `issue list` to see the nerd stuff.
 
 **The TV.** With `shelf_dir` and `bios_dir` set, the persona you `play` is on the TV:
 its shelf is hardlinked into `shelf_dir` (and the BIOS sets it needs into `bios_dir`), and
-nothing else is left there. `shelf build` and `shelf rotate` for that persona change the TV
+nothing else is left there (unless `romm_collection` is set: see below). `shelf build` and
+`shelf rotate` for that persona change the TV
 too, and a sieve that finds new games drops them into any empty shelf slots. Nothing already
 on the shelf is ever bumped by a new arrival. With `romm_url` and the token set, RomM is told
 to rescan and to forget games that left; if RomM doesn't answer, you'll see
@@ -116,6 +121,19 @@ there, it changes nothing and says `Try again later!`; move that file into the d
 Each emulator with folders is its own RomM platform, named after its games folder (`mame`,
 `fbneo`; `arcade` on a setup from before emulators). RomM only meets a folder by scanning it,
 so the first time a platform is missing Infiltrator asks RomM to scan every folder once.
+
+**The shelf as a RomM collection.** With `romm_collection` set, RomM's folders hold the whole
+library instead: every verified set of each emulator that has folders goes to its games
+folder, and every BIOS set it has to its BIOS folder. The TV sees every game, and the shelf
+of the persona you `play` is the RomM collection of that name: Infiltrator makes it (public)
+the first time, and from then on `play`, `shelf build`, `rotate`, `drop`, `add` and the sieve
+change only what is in it. Pin the collection to Argosy's home screen to see the shelf first.
+RomM is never asked to forget missing games, so a game that leaves the shelf keeps its RomM
+record, its id and its cover (a hand-set one too), and has them all again when it comes
+back. A set that leaves the library is only marked missing in RomM. One collection follows
+whoever is on the TV, not one per persona. If RomM hasn't listed a shelved set yet,
+Infiltrator leaves the collection alone and the next sieve tries again (`--verbose` names
+the sets).
 
 **Switching a game to FBNeo.** Every game runs on MAME 2003-Plus unless you say otherwise
 with `tune set ... --emulator fbneo`. That needs `fbneo_dat_path`, and the TV shows FBNeo

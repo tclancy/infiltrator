@@ -214,3 +214,39 @@ def test_fbneo_folders_without_the_fbneo_set_list_are_refused(tmp_path):
     folders = 'fbneo_shelf_dir = "/r/roms/fbneo"\nfbneo_bios_dir = "/r/bios/fbneo"\n'
     with pytest.raises(ValueError, match="fbneo_dat_path"):
         load_settings(env={}, config_file=_toml(tmp_path, BASE + folders))
+
+
+BASE = (
+    'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+    'dat_path = "/x.xml"\nmetadata_dir = "/m"\n'
+)
+WITH_ROMM = BASE + 'romm_url = "http://romm:8080"\n'
+TOKEN = {"INFILTRATOR_ROMM_TOKEN": "rmm_x"}
+
+
+def test_the_shelf_collection_is_off_unless_configured(tmp_path):
+    assert load_settings(env=TOKEN, config_file=_toml(tmp_path, WITH_ROMM)).romm_collection is None
+
+
+def test_the_shelf_collection_comes_from_toml(tmp_path):
+    cfg = _toml(tmp_path, WITH_ROMM + 'romm_collection = "On the shelf"\n')
+    assert load_settings(env=TOKEN, config_file=cfg).romm_collection == "On the shelf"
+
+
+def test_the_shelf_collection_can_be_overridden_by_the_environment(tmp_path):
+    cfg = _toml(tmp_path, WITH_ROMM + 'romm_collection = "On the shelf"\n')
+    env = {**TOKEN, "INFILTRATOR_ROMM_COLLECTION": "Tonight"}
+    assert load_settings(env=env, config_file=cfg).romm_collection == "Tonight"
+
+
+@pytest.mark.parametrize(
+    ("body", "env"),
+    [
+        (BASE + 'romm_collection = "On the shelf"\n', TOKEN),  # no RomM address
+        (WITH_ROMM + 'romm_collection = "On the shelf"\n', {}),  # no token
+        (BASE, {"INFILTRATOR_ROMM_COLLECTION": "On the shelf", **TOKEN}),
+    ],
+)
+def test_a_shelf_collection_without_romm_is_refused(tmp_path, body, env):
+    with pytest.raises(ValueError, match="romm_collection needs romm_url and a RomM token"):
+        load_settings(env=env, config_file=_toml(tmp_path, body))

@@ -44,3 +44,13 @@ def romm_pending(conn: sqlite3.Connection) -> bool:
 def set_romm_pending(conn: sqlite3.Connection, pending: bool) -> None:
     with conn:
         conn.execute("UPDATE tv SET romm_pending = ? WHERE id = 1", (int(pending),))
+
+
+def romm_shelf(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT romm_shelf FROM tv WHERE id = 1").fetchone()
+    return row["romm_shelf"] if row else None
+
+
+def set_romm_shelf(conn: sqlite3.Connection, shelf: str) -> None:
+    with conn:
+        conn.execute("UPDATE tv SET romm_shelf = ? WHERE id = 1", (shelf,))

@@ -37,6 +37,9 @@ class Settings:
     fbneo_optional_path: Path | None = None  # `scripts/fbneo_optional.py`'s output
     fbneo_shelf_dir: Path | None = None  # RomM's roms/fbneo: FBNeo's shelf games, nothing else
     fbneo_bios_dir: Path | None = None  # RomM's bios/fbneo
+    # The RomM collection that holds the TV's shelf. Set, RomM's folders hold the whole library
+    # and the shelf is this collection; unset, the folders hold the shelf and nothing else.
+    romm_collection: str | None = None
 
 
 def _read_toml(config_file: Path | None) -> dict:
@@ -49,7 +52,7 @@ def _read_toml(config_file: Path | None) -> dict:
 
 def _merge_env(raw: dict, env: Mapping[str, str]) -> dict:
     merged = dict(raw)
-    for key in (*PATH_KEYS, *OPTIONAL_PATH_KEYS, "shelf_size", "romm_url"):
+    for key in (*PATH_KEYS, *OPTIONAL_PATH_KEYS, "shelf_size", "romm_url", "romm_collection"):
         value = env.get(f"INFILTRATOR_{key.upper()}")
         if value is not None:
             merged[key] = value
@@ -92,6 +95,14 @@ def _check_fbneo(optional: dict[str, Path]) -> None:
             raise ValueError(f"{needs_it} needs fbneo_dat_path")
 
 
+def _romm_collection(merged: dict, url: str | None, token: str | None) -> str | None:
+    """The collection's name; a collection lives in RomM, so it needs RomM's address and a token."""
+    name = str(merged.get("romm_collection") or "").strip() or None
+    if name and not (url and token):
+        raise ValueError("romm_collection needs romm_url and a RomM token")
+    return name
+
+
 def _romm_token(merged: dict, env: Mapping[str, str]) -> str | None:
     if env.get(TOKEN_ENV):
         return env[TOKEN_ENV]
@@ -114,10 +125,13 @@ def load_settings(env: Mapping[str, str] = os.environ, config_file: Path | None 
     _check_romm_folders(optional)
     _check_fbneo(optional)
     url = merged.get("romm_url")
+    romm_url = str(url).rstrip("/") if url else None
+    token = _romm_token(merged, env)
     return Settings(
         **paths,
         **optional,
         shelf_size=_shelf_size(merged.get("shelf_size", 8)),
-        romm_url=str(url).rstrip("/") if url else None,
-        romm_token=_romm_token(merged, env),
+        romm_url=romm_url,
+        romm_token=token,
+        romm_collection=_romm_collection(merged, romm_url, token),
     )
