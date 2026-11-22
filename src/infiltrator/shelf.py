@@ -116,9 +116,8 @@ def rotate(
     """
     ranked = _ranked(conn, p)
     over_cap = sum(is_must_have(p, g["title"]) for g in ranked) >= size
-    shelf = sorted(current_shelf(conn, p.name), key=lambda g: (g["placed_at"], g["set_name"]))
-    retirable = [g for g in shelf if over_cap or not is_must_have(p, g["title"])]
-    out = retirable[:count]
+    shelf = current_shelf(conn, p.name)
+    out = _retirable(shelf, p, over_cap)[:count]
     taken = {g["family"] for g in shelf}
     incoming = [
         g
@@ -183,3 +182,71 @@ def fill_demo_shelf(
 ) -> list[str]:
     """Like fill_shelf, but only these arrivals may take an empty slot."""
     return _fill(conn, p, size, _ranked_arrivals(conn, p, arrived), now())
+
+
+def _retirable(shelf: list[sqlite3.Row], p: Persona, over_cap: bool) -> list[sqlite3.Row]:
+    """What may leave, longest-shelved first. Must-haves stay unless they outnumber the shelf."""
+    oldest_first = sorted(shelf, key=lambda g: (g["placed_at"], g["set_name"]))
+    return [g for g in oldest_first if over_cap or not is_must_have(p, g["title"])]
+
+
+def _titled(conn: sqlite3.Connection, p: Persona, title: str) -> list[sqlite3.Row]:
+    """Every version of the game so titled that this persona could play, dropped or not."""
+    wanted = title.casefold()
+    rows = [g for g in eligible(conn, p, ignore_drops=True) if g["title"].casefold() == wanted]
+    if not rows:
+        raise LookupError(f"no game called {title!r} that {p.name} can play")
+    return rows
+
+
+def drop(conn: sqlite3.Connection, p: Persona, title: str, now: Callable[[], str] = utcnow) -> str:
+    """Take a game off the shelf and keep it off: no fill, build or rotate brings it back.
+
+    Works whether or not the game is on the shelf now. Returns its title as the catalogue has it.
+    """
+    rows = _titled(conn, p, title)
+    families = {g["family"] for g in rows}
+    at = now()
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO shelf_drops (persona, family, at) VALUES (?, ?, ?)",
+            [(p.name, family, at) for family in sorted(families)],
+        )
+    staying = [g["set_name"] for g in current_shelf(conn, p.name) if g["family"] not in families]
+    _replace_shelf(conn, p.name, staying, at)
+    return rows[0]["title"]
+
+
+def _leaving_for(
+    conn: sqlite3.Connection, p: Persona, shelf: list[sqlite3.Row], game: sqlite3.Row, size: int
+) -> list[sqlite3.Row]:
+    """What makes room for `game`: its other version, or the longest-shelved on a full shelf."""
+    same_game = [g for g in shelf if g["family"] == game["family"]]
+    if same_game or len(shelf) < size:
+        return same_game
+    over_cap = sum(is_must_have(p, g["title"]) for g in _ranked(conn, p)) >= size
+    retirable = _retirable(shelf, p, over_cap)
+    if not retirable:
+        raise LookupError("the shelf is full and nothing on it may leave")
+    return retirable[:1]
+
+
+def add(
+    conn: sqlite3.Connection, p: Persona, title: str, size: int, now: Callable[[], str] = utcnow
+) -> tuple[list[str], list[str]]:
+    """Put a game on the shelf, forgetting it was ever dropped. Returns (sets out, sets in).
+
+    Its other version leaves if one is shelved; otherwise, on a full shelf, the game `rotate`
+    would retire first.
+    """
+    game = _family_choice(_titled(conn, p, title), p)
+    shelf = current_shelf(conn, p.name)
+    leaving = {g["set_name"] for g in _leaving_for(conn, p, shelf, game, size)} - {game["set_name"]}
+    already = any(g["set_name"] == game["set_name"] for g in shelf)
+    with conn:
+        conn.execute(
+            "DELETE FROM shelf_drops WHERE persona = ? AND family = ?", (p.name, game["family"])
+        )
+    wanted = [g["set_name"] for g in shelf if g["set_name"] not in leaving]
+    _replace_shelf(conn, p.name, wanted + ([] if already else [game["set_name"]]), now())
+    return sorted(leaving), [] if already else [game["set_name"]]
