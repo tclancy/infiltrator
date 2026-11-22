@@ -331,6 +331,7 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
         if not demo_shelf(conn, who, settings.shelf_size, arrived, emulators=shown):
             typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
             return
+        settle_emulators(conn, who, shown)  # a set of an emulator the TV can't show goes too
         set_tv_persona(conn, persona)
         start_demo(conn, since)
         publish_tv(settings, dats, conn)

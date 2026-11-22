@@ -903,6 +903,20 @@ def test_every_shelf_change_first_settles_the_shelf(fbneo_tv, command):
     assert on_tv(fbneo_tv_folder) == ["alphaua"] and "alpha" not in on_tv(mame_tv)
 
 
+def test_a_demo_leaves_no_set_of_an_emulator_the_tv_no_longer_shows(fbneo_tv, monkeypatch):
+    mame_tv, _ = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    monkeypatch.delenv("INFILTRATOR_FBNEO_SHELF_DIR")
+    monkeypatch.delenv("INFILTRATOR_FBNEO_BIOS_DIR")
+    assert run("play", "tom", "--new").exit_code == 0
+    shelf_rows = catalogue().execute("SELECT emulator, set_name FROM shelf ORDER BY 2")
+    assert [tuple(r) for r in shelf_rows] == [
+        (DEFAULT_EMULATOR, "alpha"),
+        (DEFAULT_EMULATOR, "delta"),
+    ]
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+
+
 def test_without_fbneo_folders_a_game_tuned_to_fbneo_stays_on_mame(fbneo_home, tv):
     mame_tv, _ = tv
     stock_drop(fbneo_home, "alpha")
