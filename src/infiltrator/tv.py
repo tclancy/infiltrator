@@ -1,9 +1,14 @@
-"""Put the TV persona's shelf in RomM's folders and tell RomM about it."""
+"""Put the TV persona's shelf in RomM's folders and tell RomM about it.
+
+Without `romm_collection`, RomM's folders hold the shelf and nothing else. With it, they hold
+the whole verified library and the shelf is that RomM collection.
+"""
 
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
 
+from infiltrator.catalogue.games import library_sets
 from infiltrator.catalogue.tv import romm_pending, set_romm_pending, tv_persona
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, Dat
@@ -52,19 +57,40 @@ def _target(settings: Settings, dat: Dat, folders: Folders, shelf: list[sqlite3.
     return Target(library, *folders, sets, bios_needed(dat, sets))
 
 
+def _shelf_targets(
+    settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection, persona: str
+) -> list[Target]:
+    """Each emulator with folders: the persona's shelf entries for it, and the BIOS they need."""
+    shelf = current_shelf(conn, persona)
+    folders = publish_folders(settings)
+    return [_target(settings, dats[e], pair, shelf) for e, pair in folders.items()]
+
+
+def _library_targets(settings: Settings, conn: sqlite3.Connection) -> list[Target]:
+    """Each emulator with folders: every verified set of it, its BIOS sets in the BIOS folder."""
+    targets = []
+    for emulator, folders in publish_folders(settings).items():
+        games, bios = library_sets(conn, emulator)
+        targets.append(Target(emulator_dir(settings.library_dir, emulator), *folders, games, bios))
+    return targets
+
+
 def publish_tv(
     settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection
 ) -> PublishResult | None:
-    """Make RomM's folders hold the TV persona's shelf; None when there's nothing to publish to.
+    """Make RomM's folders hold what the TV shows; None when there's nothing to publish to.
 
-    Each emulator's entries go to that emulator's folders. Every folder is checked before any
-    changes, under one lock.
+    That is the TV persona's shelf, or with `romm_collection` the whole library. Each emulator's
+    sets go to that emulator's folders. Every folder is checked before any changes, under one
+    lock.
     """
-    persona, folders = tv_persona(conn), publish_folders(settings)
-    if persona is None or not folders:
+    persona = tv_persona(conn)
+    if persona is None or not publish_folders(settings):
         return None
-    shelf = current_shelf(conn, persona)
-    targets = [_target(settings, dats[e], pair, shelf) for e, pair in folders.items()]
+    if settings.romm_collection:
+        targets = _library_targets(settings, conn)
+    else:
+        targets = _shelf_targets(settings, dats, conn, persona)
     with locked(settings.db_path.parent / "publish.lock"):
         result = publish_all(targets)
     if result.changed:

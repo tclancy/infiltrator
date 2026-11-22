@@ -162,3 +162,12 @@ def sync_games(
             record_arrivals(conn, emulator, {g.name: folder / f"{g.name}.zip" for g in games})
             count += len(games)
     return count
+
+
+def library_sets(conn: sqlite3.Connection, emulator: str) -> tuple[list[str], list[str]]:
+    """(games, BIOS sets): every verified set of one emulator, as the last sync found them."""
+    rows = conn.execute(
+        "SELECT set_name, is_bios FROM games WHERE emulator = ? ORDER BY set_name", (emulator,)
+    ).fetchall()
+    games = [r["set_name"] for r in rows if not r["is_bios"]]
+    return games, [r["set_name"] for r in rows if r["is_bios"]]

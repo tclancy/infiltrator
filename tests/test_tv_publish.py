@@ -232,3 +232,77 @@ def test_without_fbneo_folders_romm_hears_about_mames_platform_only(both):
     spy = Spy()
     tell_romm(mame_only, conn, spy)
     assert spy.refreshed == ["mame"]
+
+
+# With `romm_collection`: the whole library in RomM's folders, the shelf as a collection.
+
+COLLECTION = "On the shelf"
+
+
+def collecting(settings):
+    """The same install with the shelf as a RomM collection."""
+    return dataclasses.replace(
+        settings, romm_url="http://romm:8080", romm_token="rmm_t", romm_collection=COLLECTION
+    )
+
+
+@pytest.fixture
+def library(both):
+    """`both`, with sets nobody shelved: MAME delta and FBNeo fbonly, and each one's BIOS row."""
+    settings, dats, conn, folders = both
+    make_zip(settings.library_dir / DEFAULT_EMULATOR / "delta.zip", chips_for("delta"))
+    make_zip(settings.library_dir / FBNEO / "fbonly.zip", fbneo_chips_for("fbonly"))
+    add_game(conn, "delta")
+    add_game(conn, "fbonly", emulator=FBNEO)
+    add_game(conn, "biosx", is_bios=1)
+    add_game(conn, "biosx", emulator=FBNEO, is_bios=1)
+    return settings, dats, conn, folders
+
+
+def test_with_a_collection_every_verified_set_is_published_bios_sets_to_the_bios_folders(library):
+    settings, dats, conn, folders = library
+    publish_tv(collecting(settings), dats, conn)
+    assert contents(folders["roms-mame"]) == ["alpha.zip", "delta.zip"]
+    assert contents(folders["bios-mame"]) == ["biosx.zip"]
+    assert contents(folders["roms-fbneo"]) == ["betafb.zip", "fbonly.zip"]
+    assert contents(folders["bios-fbneo"]) == ["biosx.zip"]
+    for emulator, bios in ((DEFAULT_EMULATOR, "bios-mame"), (FBNEO, "bios-fbneo")):
+        assert same_file(folders[bios] / "biosx.zip", settings.library_dir / emulator / "biosx.zip")
+
+
+def test_without_a_collection_only_the_shelf_is_published_as_before(library):
+    settings, dats, conn, folders = library
+    publish_tv(settings, dats, conn)
+    assert contents(folders["roms-mame"]) == ["alpha.zip"]
+    assert contents(folders["bios-mame"]) == []
+    assert contents(folders["roms-fbneo"]) == ["betafb.zip"]
+    assert contents(folders["bios-fbneo"]) == ["biosx.zip"]
+
+
+def test_with_a_collection_a_set_that_left_the_library_is_unlinked(library):
+    settings, dats, conn, folders = library
+    publish_tv(collecting(settings), dats, conn)
+    with conn:
+        conn.execute("DELETE FROM games WHERE set_name = 'delta'")
+    result = publish_tv(collecting(settings), dats, conn)
+    assert result.removed == ["delta"]
+    assert contents(folders["roms-mame"]) == ["alpha.zip"]
+    assert (settings.library_dir / DEFAULT_EMULATOR / "delta.zip").exists()
+
+
+def test_with_a_collection_only_emulators_with_folders_are_published(library):
+    settings, dats, conn, folders = library
+    mame_only = dataclasses.replace(settings, fbneo_shelf_dir=None, fbneo_bios_dir=None)
+    publish_tv(collecting(mame_only), dats, conn)
+    assert contents(folders["roms-mame"]) == ["alpha.zip", "delta.zip"]
+    assert contents(folders["roms-fbneo"]) == [] and contents(folders["bios-fbneo"]) == []
+
+
+@pytest.mark.parametrize("stranger_in", ["roms-fbneo", "bios-mame"])
+def test_with_a_collection_a_stranger_in_any_folder_still_stops_every_folder(library, stranger_in):
+    settings, dats, conn, folders = library
+    (folders[stranger_in] / "hand-placed.zip").write_bytes(b"not ours")
+    with pytest.raises(PublishError):
+        publish_tv(collecting(settings), dats, conn)
+    for name, folder in folders.items():
+        assert contents(folder) == (["hand-placed.zip"] if name == stranger_in else [])
