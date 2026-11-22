@@ -15,7 +15,8 @@ from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
-from infiltrator.dat import Dat, load_dat
+from infiltrator.dat import DEFAULT_EMULATOR, Dat
+from infiltrator.dats import load_dats
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
 from infiltrator.personas import (
@@ -68,6 +69,11 @@ Days = Annotated[
 
 def _settings() -> Settings:
     return load_settings()
+
+
+def _mame_dat(settings: Settings) -> Dat:
+    """The MAME 2003-Plus set list: the only emulator the pipeline builds for so far."""
+    return load_dats(settings)[DEFAULT_EMULATOR]
 
 
 def _db(settings: Settings) -> sqlite3.Connection:
@@ -146,7 +152,7 @@ def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
 def sieve(verbose: Verbose = False) -> None:
     """Keep the real games from the drop folder; delete the rest."""
     settings = _settings()
-    dat = load_dat(settings.dat_path)
+    dat = _mame_dat(settings)
     conn = _db(settings)
     try:
         report = run_sieve(
@@ -184,7 +190,7 @@ def sieve(verbose: Verbose = False) -> None:
 def rescan() -> None:
     """Rebuild the game list from the library."""
     settings = _settings()
-    count = _sync(settings, load_dat(settings.dat_path), _db(settings))
+    count = _sync(settings, _mame_dat(settings), _db(settings))
     typer.echo(f"{count} games in the library.")
 
 
@@ -246,7 +252,7 @@ def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = F
     conn = _db(settings)
     who = _persona(conn, persona)
     with _or_try_again_later(verbose):
-        dat = load_dat(settings.dat_path)
+        dat = _mame_dat(settings)
         preflight(settings)
         set_tv_persona(conn, persona)
         fill_shelf(conn, who, settings.shelf_size)
@@ -266,7 +272,7 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
     who = _persona(conn, persona)
     since = window_start(days)
     with _or_try_again_later(verbose):
-        dat = load_dat(settings.dat_path)
+        dat = _mame_dat(settings)
         preflight(settings)
         if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
             typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
@@ -283,7 +289,7 @@ def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) 
     """Around a shelf change: refuse before it if the TV can't follow, publish after it."""
     on_tv = tv_persona(conn) == persona
     with _or_try_again_later(verbose=False):
-        dat = load_dat(settings.dat_path) if on_tv else None
+        dat = _mame_dat(settings) if on_tv else None
         if on_tv:
             preflight(settings)
         yield

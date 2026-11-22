@@ -561,3 +561,12 @@ def test_shelf_add_of_tv_persona_changes_the_tv(home, tv):
     # alpha should be back on TV
     assert on_tv(shelf) == ["alpha", "delta"]
     assert refreshed.count("arcade") >= 2
+
+
+def test_a_configured_fbneo_set_list_is_read_by_every_sieve(home, tmp_path, monkeypatch):
+    monkeypatch.setenv("INFILTRATOR_FBNEO_DAT_PATH", str(tmp_path / "missing-fbneo.dat"))
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    result = run("sieve")
+    assert result.exit_code == 1
+    assert "missing-fbneo.dat" in str(result.exception)
+    assert (home / "alpha.zip").exists()

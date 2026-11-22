@@ -129,3 +129,39 @@ def test_romm_folders_must_be_two_separate_folders(tmp_path, folders):
     )
     with pytest.raises(ValueError):
         load_settings(env={}, config_file=cfg)
+
+
+BASE = (
+    'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+    'dat_path = "/x.xml"\nmetadata_dir = "/m"\n'
+)
+
+
+def test_fbneo_is_off_unless_configured(tmp_path):
+    s = load_settings(env={}, config_file=_toml(tmp_path, BASE))
+    assert (s.fbneo_dat_path, s.fbneo_optional_path) == (None, None)
+
+
+def test_fbneo_paths_come_from_toml(tmp_path):
+    cfg = _toml(
+        tmp_path, BASE + 'fbneo_dat_path = "~/fbneo.dat"\nfbneo_optional_path = "/o.json"\n'
+    )
+    s = load_settings(env={}, config_file=cfg)
+    assert s.fbneo_dat_path == Path.home() / "fbneo.dat"
+    assert s.fbneo_optional_path == Path("/o.json")
+
+
+def test_fbneo_paths_can_be_overridden_by_the_environment(tmp_path):
+    cfg = _toml(tmp_path, BASE + 'fbneo_dat_path = "/toml.dat"\n')
+    env = {
+        "INFILTRATOR_FBNEO_DAT_PATH": "/env.dat",
+        "INFILTRATOR_FBNEO_OPTIONAL_PATH": "/env.json",
+    }
+    s = load_settings(env=env, config_file=cfg)
+    assert (s.fbneo_dat_path, s.fbneo_optional_path) == (Path("/env.dat"), Path("/env.json"))
+
+
+def test_an_fbneo_optional_list_without_the_fbneo_set_list_is_refused(tmp_path):
+    cfg = _toml(tmp_path, BASE + 'fbneo_optional_path = "/o.json"\n')
+    with pytest.raises(ValueError, match="fbneo_dat_path"):
+        load_settings(env={}, config_file=cfg)
