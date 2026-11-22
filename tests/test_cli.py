@@ -3,10 +3,12 @@ import time
 
 import pytest
 from conftest import chips_for, fbneo_chips_for, make_zip
+from test_romm import FakeRomm
 from typer.testing import CliRunner
 
 from infiltrator import cli
 from infiltrator.dat import DEFAULT_EMULATOR
+from infiltrator.romm import RommClient
 
 runner = CliRunner()
 
@@ -926,3 +928,100 @@ def test_without_fbneo_folders_a_game_tuned_to_fbneo_stays_on_mame(fbneo_home, t
     assert fbneo_library(fbneo_home) == ["alphaua.zip"]  # built, ready for when it can be shown
     assert on_tv(mame_tv) == ["alpha"]
     assert run("shelf", "show", "tom").output == "Alpha Blaster\n"
+
+
+# The shelf as a RomM collection.
+
+COLLECTION = "On the shelf"
+MAME_PLATFORM = 1
+
+
+@pytest.fixture
+def collection_tv(home, tmp_path, monkeypatch):
+    """RomM's MAME 2003-Plus folders, a RomM that keeps the shelf as a collection, and tom.
+
+    The library holds two versions of Alpha Blaster and Delta; a shelf holds one per game.
+    """
+    shelf, bios = tmp_path / "roms" / "mame", tmp_path / "bios" / "mame"
+    shelf.mkdir(parents=True)
+    bios.mkdir(parents=True)
+    for key, value in {
+        "SHELF_DIR": str(shelf),
+        "BIOS_DIR": str(bios),
+        "ROMM_URL": "http://romm:8080",
+        "ROMM_TOKEN": "rmm_t",
+        "ROMM_COLLECTION": COLLECTION,
+    }.items():
+        monkeypatch.setenv(f"INFILTRATOR_{key}", value)
+    fake = FakeRomm(platforms=[{"id": MAME_PLATFORM, "fs_slug": "mame"}], folders={1: shelf})
+
+    def client(settings):
+        return RommClient(settings.romm_url, settings.romm_token, request=fake, sleep=lambda s: 0)
+
+    monkeypatch.setattr("infiltrator.tv.romm_client", client)
+    make_zip(home / "alpha.zip", {**chips_for("alpha"), "ab3.bin": chips_for("alphab")["ab3.bin"]})
+    stock_drop(home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    return shelf, fake
+
+
+def in_romm(fake, *names):
+    return {fake.rom_id(MAME_PLATFORM, f"{name}.zip") for name in names}
+
+
+def shelved():
+    return sorted(tuple(r) for r in catalogue().execute("SELECT emulator, set_name FROM shelf"))
+
+
+def pending():
+    from infiltrator.catalogue.tv import romm_pending
+
+    return romm_pending(catalogue())
+
+
+def test_play_puts_the_whole_library_in_romm_and_the_shelf_in_its_collection(collection_tv):
+    folder, fake = collection_tv
+    result = run("play", "tom")
+    assert result.exit_code == 0, result.output
+    assert on_tv(folder) == ["alpha", "alphab", "delta"]
+    assert fake.members(COLLECTION) == in_romm(fake, "alpha", "delta")
+    assert [c["is_public"] for c in fake.collections] == [True]
+    assert result.output.splitlines() == ["Alpha Blaster", "Delta"]
+    assert not pending()
+
+
+def test_drop_add_and_rotate_change_the_collection_and_no_file(collection_tv):
+    folder, fake = collection_tv
+    run("play", "tom")
+    files = on_tv(folder)
+    assert run("shelf", "drop", "tom", "Delta").exit_code == 0
+    assert fake.members(COLLECTION) == in_romm(fake, "alpha") and on_tv(folder) == files
+    assert run("shelf", "add", "tom", "Delta").exit_code == 0
+    assert fake.members(COLLECTION) == in_romm(fake, "alpha", "delta") and on_tv(folder) == files
+    with catalogue() as conn:  # alpha has been on longest; delta is the best unshelved
+        conn.execute("DELETE FROM shelf WHERE set_name = 'delta'")
+    assert run("shelf", "rotate", "tom").output.splitlines() == ["Out: Alpha Blaster", "In: Delta"]
+    assert fake.members(COLLECTION) == in_romm(fake, "delta") and on_tv(folder) == files
+    assert [c["id"] for c in fake.collections] == [fake.collections[0]["id"]]  # made once
+
+
+def test_with_a_collection_romm_is_never_asked_to_purge_missing_roms(collection_tv, home):
+    _folder, fake = collection_tv
+    run("play", "tom")
+    run("shelf", "drop", "tom", "Delta")
+    run("shelf", "add", "tom", "Delta")
+    with catalogue() as conn:
+        conn.execute("DELETE FROM shelf WHERE set_name = 'delta'")
+    run("shelf", "rotate", "tom")
+    stock_drop(home, "beta", "biosx")
+    assert sum(u.endswith("/api/tasks/scan") for _m, u, _b in fake.calls) >= 5
+    assert fake.cleanups() == []
+
+
+def test_without_a_collection_the_purge_still_runs(collection_tv, monkeypatch):
+    folder, fake = collection_tv
+    monkeypatch.delenv("INFILTRATOR_ROMM_COLLECTION")
+    assert run("play", "tom").exit_code == 0
+    assert on_tv(folder) == ["alpha", "delta"]
+    assert fake.cleanups() == [{"platform_ids": [MAME_PLATFORM]}]
+    assert fake.collections == []
