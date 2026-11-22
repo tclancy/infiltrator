@@ -1,6 +1,9 @@
 # Plan: named shelf changes, an emulator per game, the shelf as a collection
 
-Spec: `../specs/2026-11-22-emulator-per-game-design.md`. **Draft until the spec is approved.**
+Spec: `../specs/2026-11-22-emulator-per-game-design.md`.
+
+Done as of 2026-11-22: Part 1 (PR #13, deployed; Tekken Tag Tournament dropped and Heavy Barrel
+added for tom), step 7 (PR #12) and step 8 (PR #14).
 One branch and PR per part. Test first for each step; `uv run pytest` and
 `uv run pre-commit run -a` green at the end of each part.
 

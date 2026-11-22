@@ -1,6 +1,6 @@
 # Infiltrator: named shelf changes, an emulator per game, and a library RomM keeps
 
-**Draft. Not approved: waiting on Tom to confirm the requirements and the six decisions below.**
+Approved requirements and decisions: Tom, 2026-11-22, in chat.
 Covers issues #7, #8, #9 and #10. Builds on `2026-10-30-shelf-brain-design.md` and
 `2026-10-30-romm-end-design.md`, and reverses two of the latter's "Not doing" lines (RomM
 collections; any other platform folder).
@@ -91,7 +91,7 @@ from `GET /api/roms` per platform, creates the collection once, and replaces its
 `PUT /api/collections/{id}`. RomM only flags a vanished file as missing and re-attaches it when it
 returns; it is the cleanup task Infiltrator runs today that deletes the record and its cover.
 
-## Decisions that are Tom's
+## Decisions (Tom, 2026-11-22: yes to all)
 
 1. **Folder names `mame` and `fbneo`, retiring `arcade`.** One-time cost: every game gets a new RomM
    id, covers are fetched again (Zaxxon's hand-set cover is lost once), and Argosy shows two platforms
