@@ -10,14 +10,14 @@ import typer
 
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.arrivals import arrived_since, window_start
-from infiltrator.catalogue.emulators import choose_emulator
+from infiltrator.catalogue.emulators import choose_emulator, families_on
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, IS_BIOS, Dat
-from infiltrator.dats import default_wanted, load_dats
+from infiltrator.dats import Wanted, load_dats, wanted_for
 from infiltrator.library import move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import title
@@ -41,7 +41,7 @@ from infiltrator.shelf import (
     fill_shelf,
     rotate,
 )
-from infiltrator.sieve import SieveReport, run_sieve
+from infiltrator.sieve import SieveReport, rebuild_library, run_sieve
 from infiltrator.tv import preflight, publish_tv, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
@@ -85,6 +85,11 @@ def _library_ready(settings: Settings) -> None:
 
 def _db(settings: Settings) -> sqlite3.Connection:
     return connect(settings.db_path)
+
+
+def _wanted(dats: Mapping[str, Dat], conn: sqlite3.Connection) -> Wanted:
+    """What to build: every MAME 2003-Plus set, and the FBNeo sets of games chosen for it."""
+    return wanted_for(dats, families_on(conn, FBNEO))
 
 
 def _sync(settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection) -> int:
@@ -221,7 +226,7 @@ def sieve(verbose: Verbose = False) -> None:
         report = run_sieve(
             settings,
             dats,
-            wanted=default_wanted(dats),  # FBNeo: nothing yet; the next step asks tuning
+            wanted=_wanted(dats, conn),
             settle_seconds=SETTLE_SECONDS,
             on_library_changed=lambda: _sync(settings, dats, conn),
         )
@@ -510,6 +515,45 @@ def tune_set(
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
     set_tuning(conn, DEFAULT_EMULATOR, set_name, device, settings)
-    if emulator is not None:
-        choose_emulator(conn, _family_of(conn, set_name), emulator)
+    if emulator is None:
+        typer.echo("Saved.")
+        return
+    family = _family_of(conn, set_name)
+    choose_emulator(conn, family, emulator)
     typer.echo("Saved.")
+    _follow_choice(config, conn, family, emulator)
+
+
+def _build_choices(settings: Settings, conn: sqlite3.Connection) -> None:
+    """What a sieve with an empty drop folder would do: build, catalogue, then show the TV.
+
+    The chosen games' FBNeo sets are made from chips the library holds already, so nobody
+    has to wait for the sieve timer to see a choice take effect.
+    """
+    _library_ready(settings)
+    dats = load_dats(settings)
+    if FBNEO in dats:
+        rebuild_library(settings, dats, {FBNEO: _wanted(dats, conn)[FBNEO]})
+    _sync(settings, dats, conn)
+    _sync_tv(settings, dats[DEFAULT_EMULATOR], conn)
+
+
+def _on_emulator(conn: sqlite3.Connection, family: str, emulator: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM games WHERE emulator = ? AND family = ? AND is_bios = 0",
+        (emulator, family),
+    ).fetchone()
+    return row is not None
+
+
+def _follow_choice(
+    settings: Settings, conn: sqlite3.Connection, family: str, emulator: str
+) -> None:
+    """Make the choice real now; if that fails, the sieve timer will."""
+    try:
+        _build_choices(settings, conn)
+    except Exception:
+        typer.echo("The TV will catch up shortly.")
+        return
+    if not _on_emulator(conn, family, emulator):
+        typer.echo(f"No {emulator} set for it yet: the library doesn't hold all its chips.")

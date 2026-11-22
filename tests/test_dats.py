@@ -5,7 +5,7 @@ from conftest import label_bytes
 
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO
-from infiltrator.dats import load_dats
+from infiltrator.dats import load_dats, wanted_for
 
 
 def settings(tmp_path, mame, **kw) -> Settings:
@@ -36,3 +36,17 @@ def test_fbneo_is_loaded_with_its_optional_rom_list(tmp_path, synthetic_dat, syn
     assert [r.name for r in dats[FBNEO].required_roms(fbneo_alpha)] == ["a1.bin"]
     mame_alpha = dats[DEFAULT_EMULATOR].games["alpha"]
     assert len(dats[DEFAULT_EMULATOR].required_roms(mame_alpha)) == 2
+
+
+def test_what_to_build_names_fbneo_sets_only_for_games_chosen_for_it(
+    tmp_path, synthetic_dat, disagreeing_fbneo_dat
+):
+    dats = load_dats(settings(tmp_path, synthetic_dat, fbneo_dat_path=disagreeing_fbneo_dat))
+    assert wanted_for(dats, set()) == {DEFAULT_EMULATOR: None, FBNEO: frozenset()}
+    assert wanted_for(dats, {"beta"}) == {DEFAULT_EMULATOR: None, FBNEO: {"betafb", "biosx"}}
+    assert wanted_for(dats, {"alpha", "delta"})[FBNEO] == {"alpha", "alphaua"}
+
+
+def test_without_fbneo_configured_a_choice_of_fbneo_means_nothing(tmp_path, synthetic_dat):
+    dats = load_dats(settings(tmp_path, synthetic_dat))
+    assert wanted_for(dats, {"alpha"}) == {DEFAULT_EMULATOR: None}

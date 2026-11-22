@@ -141,6 +141,15 @@ def _check_wanted(dats: Mapping[str, Dat], wanted: Wanted) -> None:
         raise ValueError(f"no set list loaded for: {', '.join(unknown)}")
 
 
+def rebuild_library(
+    settings: Settings, dats: Mapping[str, Dat], wanted: Wanted
+) -> dict[str, RebuildResult]:
+    """Build the wanted sets from chips the library already holds. The drop folder is not read."""
+    _check_wanted(dats, wanted)
+    library = settings.library_dir
+    return rebuild(_pool([], library), dats, library, wanted)
+
+
 def run_sieve(
     settings: Settings,
     dats: Mapping[str, Dat],

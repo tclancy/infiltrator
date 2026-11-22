@@ -750,3 +750,63 @@ def test_the_choice_survives_a_rescan(with_fbneo):
     tune("Alpha Blaster", "--emulator", "fbneo")
     assert run("rescan").exit_code == 0
     assert choices() == [("alpha", "fbneo")]
+
+
+@pytest.fixture
+def fbneo_home(with_fbneo, fbneo_optional_json, monkeypatch):
+    """FBNeo's set list and its optional-ROM list, so alphaua can be built without its PROM."""
+    monkeypatch.setenv("INFILTRATOR_FBNEO_OPTIONAL_PATH", str(fbneo_optional_json))
+    return with_fbneo
+
+
+def fbneo_library(home):
+    folder = home.parent / "library" / "fbneo"
+    return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+
+
+def choose_directly(family, emulator="fbneo"):
+    """The choice alone, as `tune set` records it, without the build that follows it there."""
+    from infiltrator.catalogue.emulators import choose_emulator
+
+    choose_emulator(catalogue(), family, emulator)
+
+
+def test_a_sieve_with_an_empty_drop_folder_builds_a_chosen_games_fbneo_set(fbneo_home):
+    stock_drop(fbneo_home, "alpha")
+    choose_directly("alpha")
+    assert list(fbneo_home.iterdir()) == []
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]  # FBNeo's alpha needs a chip nobody has
+    found = catalogue().execute("SELECT set_name FROM games WHERE emulator = 'fbneo'").fetchall()
+    assert [r["set_name"] for r in found] == ["alphaua"]
+
+
+def test_a_chosen_games_fbneo_set_comes_with_the_fbneo_bios_it_needs(fbneo_home):
+    stock_drop(fbneo_home, "alpha", "biosx", "beta")
+    choose_directly("beta")
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["betafb.zip", "biosx.zip"]
+
+
+def test_games_nobody_chose_for_fbneo_get_no_fbneo_set(fbneo_home):
+    stock_drop(fbneo_home, "alpha", "biosx", "beta")
+    assert run("sieve").exit_code == 0
+    assert fbneo_library(fbneo_home) == []
+
+
+def test_tune_set_to_fbneo_builds_the_set_without_waiting_for_a_sieve(fbneo_home):
+    stock_drop(fbneo_home, "alpha")
+    left_there = make_zip(fbneo_home / "delta.zip", chips_for("delta"))
+    result = tune("Alpha Blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert result.output == "Saved.\n"
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]
+    assert left_there.exists()  # the drop folder is the sieve's alone
+
+
+def test_tune_set_to_fbneo_says_so_when_no_fbneo_set_can_be_built(fbneo_home):
+    stock_drop(fbneo_home, "delta")
+    result = tune("Delta", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert "No fbneo set for it yet" in result.output
+    assert choices() == [("delta", "fbneo")]
