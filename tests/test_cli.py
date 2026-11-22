@@ -810,3 +810,101 @@ def test_tune_set_to_fbneo_says_so_when_no_fbneo_set_can_be_built(fbneo_home):
     assert result.exit_code == 0, result.output
     assert "No fbneo set for it yet" in result.output
     assert choices() == [("delta", "fbneo")]
+
+
+@pytest.fixture
+def fbneo_tv(fbneo_home, tv, tmp_path, monkeypatch):
+    """The TV with FBNeo's folders beside MAME 2003-Plus's; tom watching Alpha and Delta."""
+    folders = tmp_path / "roms" / "fbneo", tmp_path / "bios" / "fbneo"
+    for folder in folders:
+        folder.mkdir(parents=True)
+    monkeypatch.setenv("INFILTRATOR_FBNEO_SHELF_DIR", str(folders[0]))
+    monkeypatch.setenv("INFILTRATOR_FBNEO_BIOS_DIR", str(folders[1]))
+    stock_drop(fbneo_home, "alpha", "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    assert run("play", "tom").exit_code == 0
+    return tv[0], folders[0]
+
+
+def test_tuning_a_shelved_game_to_fbneo_switches_it_on_the_tv(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+    result = tune("Alpha Blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert on_tv(mame_tv) == ["delta"] and on_tv(fbneo_tv_folder) == ["alphaua"]
+    shown = run("shelf", "show", "tom").output.splitlines()
+    assert shown == ["Alpha Blaster", "Delta"]  # one Alpha Blaster, by its MAME title
+
+
+def test_tuning_back_to_mame_puts_the_mame_set_back_on_the_tv(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert tune("Alpha Blaster", "--emulator", DEFAULT_EMULATOR).exit_code == 0
+    assert on_tv(mame_tv) == ["alpha", "delta"] and on_tv(fbneo_tv_folder) == []
+
+
+def test_drop_and_add_by_title_act_on_the_fbneo_set(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    result = run("shelf", "drop", "tom", "Alpha Blaster")
+    assert result.output == "Out: Alpha Blaster\n"
+    assert on_tv(fbneo_tv_folder) == [] and on_tv(mame_tv) == ["delta"]
+    result = run("shelf", "add", "tom", "alpha blaster")
+    assert result.output == "In: Alpha Blaster\n"
+    assert on_tv(fbneo_tv_folder) == ["alphaua"] and on_tv(mame_tv) == ["delta"]
+
+
+def test_rotating_out_an_fbneo_set_prints_its_title(fbneo_tv):
+    _mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    with catalogue() as conn:  # alpha has been on longest; make it the only one that may go
+        conn.execute("DELETE FROM shelf WHERE set_name = 'delta'")
+    result = run("shelf", "rotate", "tom")
+    assert result.output.splitlines() == ["Out: Alpha Blaster", "In: Delta"]
+    assert on_tv(fbneo_tv_folder) == []
+
+
+def test_a_sieve_settles_a_game_whose_fbneo_set_left_the_library(fbneo_tv):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    (fbneo_tv_folder / "alphaua.zip").unlink()
+    (fbneo_tv_folder.parents[1] / "library" / "fbneo" / "alphaua.zip").unlink()
+    with catalogue() as conn:  # FBNeo's set list no longer names it, say, so it is not rebuilt
+        conn.execute("DELETE FROM game_emulators")
+    assert run("sieve").exit_code == 0
+    assert on_tv(mame_tv) == ["alpha", "delta"] and on_tv(fbneo_tv_folder) == []
+    shelf_rows = catalogue().execute("SELECT emulator, set_name FROM shelf ORDER BY 2")
+    assert [tuple(r) for r in shelf_rows] == [
+        (DEFAULT_EMULATOR, "alpha"),
+        (DEFAULT_EMULATOR, "delta"),
+    ]
+
+
+def fbneo_set_appears(home, name="alphaua"):
+    """An FBNeo set lands in the library and the catalogue, and nothing else happens."""
+    chips = {k: v for k, v in fbneo_chips_for(name).items() if k != "ua-prom.bin"}
+    make_zip(home.parent / "library" / "fbneo" / f"{name}.zip", chips)
+    assert run("rescan").exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "command", [("shelf", "drop", "tom", "Delta"), ("play", "tom"), ("shelf", "build", "tom")]
+)
+def test_every_shelf_change_first_settles_the_shelf(fbneo_tv, command):
+    mame_tv, fbneo_tv_folder = fbneo_tv
+    choose_directly("alpha")
+    fbneo_set_appears(fbneo_tv_folder.parents[1] / "drop")
+    assert on_tv(mame_tv) == ["alpha", "delta"]
+    assert run(*command).exit_code == 0
+    assert on_tv(fbneo_tv_folder) == ["alphaua"] and "alpha" not in on_tv(mame_tv)
+
+
+def test_without_fbneo_folders_a_game_tuned_to_fbneo_stays_on_mame(fbneo_home, tv):
+    mame_tv, _ = tv
+    stock_drop(fbneo_home, "alpha")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    assert tune("Alpha Blaster", "--emulator", "fbneo").exit_code == 0
+    assert fbneo_library(fbneo_home) == ["alphaua.zip"]  # built, ready for when it can be shown
+    assert on_tv(mame_tv) == ["alpha"]
+    assert run("shelf", "show", "tom").output == "Alpha Blaster\n"

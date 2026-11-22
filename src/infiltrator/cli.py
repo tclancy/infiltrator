@@ -74,11 +74,6 @@ def _settings() -> Settings:
     return load_settings()
 
 
-def _mame_dat(settings: Settings) -> Dat:
-    """The MAME 2003-Plus set list: the only emulator the pipeline builds for so far."""
-    return load_dats(settings)[DEFAULT_EMULATOR]
-
-
 def _library_ready(settings: Settings) -> None:
     """Before anything reads or writes the library: move an old flat one into place."""
     move_flat_library(settings.library_dir)
@@ -117,7 +112,7 @@ def _or_try_again_later(verbose: bool) -> Iterator[None]:
         raise _give_up(err, verbose) from err
 
 
-def _sync_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> None:
+def _sync_tv(settings: Settings, dats: Mapping[str, Dat], conn: sqlite3.Connection) -> None:
     """Fill the TV shelf's empty slots, publish it, and tell RomM anything it missed.
 
     Every sieve runs this, new games or not, so a publish or a RomM call that
@@ -127,7 +122,7 @@ def _sync_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> None:
     if persona is None:
         return
     _top_up(settings, conn, load_persona(conn, persona))
-    publish_tv(settings, dat, conn)
+    publish_tv(settings, dats, conn)
     tell_romm(settings, conn)
 
 
@@ -220,7 +215,6 @@ def sieve(verbose: Verbose = False) -> None:
     except Exception as err:
         raise _give_up(err, verbose) from err
     dats = load_dats(settings)
-    dat = dats[DEFAULT_EMULATOR]
     conn = _db(settings)
     try:
         report = run_sieve(
@@ -236,7 +230,7 @@ def sieve(verbose: Verbose = False) -> None:
         raise _give_up(err, verbose) from err
     _echo_sieved(dats, report, verbose)
     with _or_try_again_later(verbose):
-        _sync_tv(settings, dat, conn)
+        _sync_tv(settings, dats, conn)
 
 
 @app.command()
@@ -307,13 +301,13 @@ def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = F
     who = _persona(conn, persona)
     with _or_try_again_later(verbose):
         _library_ready(settings)
-        dat = _mame_dat(settings)
+        dats = load_dats(settings)
         preflight(settings)
         set_tv_persona(conn, persona)
         shown = shown_emulators(settings)
         settle_emulators(conn, who, shown)
         fill_shelf(conn, who, settings.shelf_size, emulators=shown)
-        publish_tv(settings, dat, conn)
+        publish_tv(settings, dats, conn)
     _tell_romm_or_shrug(settings, conn, verbose)
     shelf_show(persona)
 
@@ -330,7 +324,7 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
     since = window_start(days)
     with _or_try_again_later(verbose):
         _library_ready(settings)
-        dat = _mame_dat(settings)
+        dats = load_dats(settings)
         preflight(settings)
         arrived = arrived_since(conn, DEFAULT_EMULATOR, since)
         shown = shown_emulators(settings)
@@ -339,7 +333,7 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
             return
         set_tv_persona(conn, persona)
         start_demo(conn, since)
-        publish_tv(settings, dat, conn)
+        publish_tv(settings, dats, conn)
     _tell_romm_or_shrug(settings, conn, verbose)
     shelf_show(persona)
 
@@ -356,7 +350,7 @@ def _changing_shelf(
     on_tv = tv_persona(conn) == who.name
     with _or_try_again_later(verbose=False):
         _library_ready(settings)
-        dat = _mame_dat(settings) if on_tv else None
+        dats = load_dats(settings) if on_tv else {}
         if on_tv:
             preflight(settings)
         shown = shown_emulators(settings)
@@ -364,7 +358,7 @@ def _changing_shelf(
         yield shown
         if on_tv:
             end_demo(conn)
-            publish_tv(settings, dat, conn)
+            publish_tv(settings, dats, conn)
 
 
 @shelf_app.command("show")
@@ -545,7 +539,7 @@ def _build_choices(settings: Settings, conn: sqlite3.Connection) -> None:
     if FBNEO in dats:
         rebuild_library(settings, dats, {FBNEO: _wanted(dats, conn)[FBNEO]})
     _sync(settings, dats, conn)
-    _sync_tv(settings, dats[DEFAULT_EMULATOR], conn)
+    _sync_tv(settings, dats, conn)
 
 
 def _on_emulator(conn: sqlite3.Connection, family: str, emulator: str) -> bool:

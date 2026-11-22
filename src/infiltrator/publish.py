@@ -31,8 +31,20 @@ class PublishResult:
 @dataclass
 class _Plan:
     folder: Path
+    library: Path
     link: list[str]
     unlink: list[str]
+
+
+@dataclass(frozen=True)
+class Target:
+    """One emulator's pair of published folders, the sets wanted in them, and where they live."""
+
+    library: Path
+    shelf_dir: Path
+    bios_dir: Path
+    sets: list[str]
+    bios: list[str]
 
 
 @contextmanager
@@ -82,12 +94,14 @@ def _plan(folder: Path, library: Path, wanted: list[str]) -> _Plan:
     present = _ours_present(folder, library)
     return _Plan(
         folder,
+        library,
         link=[name for name in wanted if name not in present],
         unlink=[name for name in present if name not in wanted],
     )
 
 
-def _link(plan: _Plan, library: Path, result: PublishResult) -> None:
+def _link(plan: _Plan, result: PublishResult) -> None:
+    library = plan.library
     for name in plan.link:
         target = plan.folder / f"{name}.zip"
         try:
@@ -99,7 +113,8 @@ def _link(plan: _Plan, library: Path, result: PublishResult) -> None:
         result.added.append(name)
 
 
-def _unlink(plan: _Plan, library: Path, result: PublishResult) -> None:
+def _unlink(plan: _Plan, result: PublishResult) -> None:
+    library = plan.library
     for name in plan.unlink:
         target = plan.folder / f"{name}.zip"
         if not _is_ours(target, library):  # changed since the plan: not ours to delete
@@ -108,19 +123,36 @@ def _unlink(plan: _Plan, library: Path, result: PublishResult) -> None:
         result.removed.append(name)
 
 
+def _plans(target: Target) -> tuple[_Plan, _Plan]:
+    """(games, BIOS): what one emulator's two folders need; raises before anything changes."""
+    return (
+        _plan(target.shelf_dir, target.library, sorted(target.sets)),
+        _plan(target.bios_dir, target.library, sorted(target.bios)),
+    )
+
+
+def publish_all(targets: list[Target]) -> PublishResult:
+    """Check every folder of every emulator first, then change them; returns names added, removed.
+
+    A stranger in any one folder stops every folder changing. Order matters if something fails
+    part-way: BIOS sets arrive before the games that need them, and new links go in before old
+    ones come out, across all the emulators at once.
+    """
+    plans = [_plans(target) for target in targets]
+    result = PublishResult()
+    for _games, bios in plans:
+        _link(bios, result)
+    for games, _bios in plans:
+        _link(games, result)
+    for games, _bios in plans:
+        _unlink(games, result)
+    for _games, bios in plans:
+        _unlink(bios, result)
+    return result
+
+
 def publish(
     library: Path, shelf_dir: Path, bios_dir: Path, sets: list[str], bios: list[str]
 ) -> PublishResult:
-    """Check both folders first, then change them; returns set names added and removed.
-
-    Order matters if something fails part-way: BIOS sets arrive before the games
-    that need them, and new links go in before old ones come out.
-    """
-    shelf = _plan(shelf_dir, library, sorted(sets))
-    bios_plan = _plan(bios_dir, library, sorted(bios))
-    result = PublishResult()
-    _link(bios_plan, library, result)
-    _link(shelf, library, result)
-    _unlink(shelf, library, result)
-    _unlink(bios_plan, library, result)
-    return result
+    """One emulator's folders: see `publish_all`."""
+    return publish_all([Target(library, shelf_dir, bios_dir, sets, bios)])
