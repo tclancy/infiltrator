@@ -1025,3 +1025,43 @@ def test_without_a_collection_the_purge_still_runs(collection_tv, monkeypatch):
     assert on_tv(folder) == ["alpha", "delta"]
     assert fake.cleanups() == [{"platform_ids": [MAME_PLATFORM]}]
     assert fake.collections == []
+
+
+@pytest.mark.parametrize("forbidden", ["/api/roms", "/api/collections"])
+def test_a_token_without_the_new_scopes_says_the_tv_will_catch_up(collection_tv, forbidden):
+    folder, fake = collection_tv
+    fake.forbid = {forbidden}
+    result = run("play", "tom", "-v")
+    assert result.exit_code == 0, result.output
+    assert "The TV will catch up shortly." in result.output and "403" in result.output
+    assert shelved() == [(DEFAULT_EMULATOR, "alpha"), (DEFAULT_EMULATOR, "delta")]
+    assert pending() and fake.members(COLLECTION) == set()
+    assert on_tv(folder) == ["alpha", "alphab", "delta"]  # the folders need no RomM
+    fake.forbid = set()
+    assert run("sieve").exit_code == 0
+    assert fake.members(COLLECTION) == in_romm(fake, "alpha", "delta")
+    assert not pending()
+    assert shelved() == [(DEFAULT_EMULATOR, "alpha"), (DEFAULT_EMULATOR, "delta")]
+
+
+def test_a_shelf_change_with_a_token_short_of_scopes_still_changes_the_shelf(collection_tv):
+    _folder, fake = collection_tv
+    run("play", "tom")
+    fake.forbid = {"/api/collections"}
+    result = run("shelf", "drop", "tom", "Delta")
+    assert result.exit_code == 0
+    assert result.output.splitlines() == ["Out: Delta", "The TV will catch up shortly."]
+    assert shelved() == [(DEFAULT_EMULATOR, "alpha")]
+    assert pending() and fake.members(COLLECTION) == in_romm(fake, "alpha", "delta")
+
+
+def test_shelved_sets_romm_does_not_list_are_named_and_the_collection_is_not_made(collection_tv):
+    _folder, fake = collection_tv
+    fake.folders = {}  # RomM's scan finds nothing
+    result = run("play", "tom", "-v")
+    assert result.exit_code == 0, result.output
+    assert "The TV will catch up shortly." in result.output
+    assert "mame/alpha" in result.output and "mame/delta" in result.output
+    assert fake.collections == [] and pending()
+    plain = run("play", "tom")
+    assert "mame/alpha" not in plain.output
