@@ -672,3 +672,81 @@ def test_fbneo_sets_in_the_library_are_catalogued_but_never_shelved_yet(with_fbn
     assert result.exit_code == 0, result.output
     assert on_tv(shelf) == ["alpha"]
     assert result.output.strip().splitlines()[-1] == "Alpha Blaster"
+
+
+# Choosing an emulator per game.
+
+
+def catalogue():
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    return connect(load_settings().db_path)
+
+
+def choices():
+    rows = catalogue().execute("SELECT family, emulator FROM game_emulators ORDER BY family")
+    return [tuple(r) for r in rows]
+
+
+def tunings():
+    rows = catalogue().execute("SELECT emulator, set_name, device, settings FROM control_tuning")
+    return sorted(tuple(r) for r in rows)
+
+
+def tune(title, *extra, settings="remap"):
+    return run("tune", "set", title, "--device", "sabrina", "--settings", settings, *extra)
+
+
+def test_tune_set_with_an_emulator_records_the_choice_for_the_game(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    result = tune("alpha blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert choices() == [("alpha", "fbneo")]
+    assert tunings() == [(DEFAULT_EMULATOR, "alpha", "sabrina", "remap")]
+
+
+def test_a_clones_choice_is_recorded_for_its_whole_game(with_fbneo):
+    stock_drop(with_fbneo, "alphab")
+    assert tune("Alpha Blaster", "--emulator", "fbneo").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]
+
+
+def test_tune_set_with_mame_2003_plus_forgets_the_choice(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    result = tune("Alpha Blaster", "--emulator", DEFAULT_EMULATOR, settings="plain")
+    assert result.exit_code == 0, result.output
+    assert choices() == []
+    assert tunings() == [(DEFAULT_EMULATOR, "alpha", "sabrina", "plain")]
+
+
+def test_tune_set_without_an_emulator_leaves_the_choice_alone(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert tune("Alpha Blaster", settings="again").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]
+
+
+@pytest.mark.parametrize(
+    ("emulator", "says"), [("snes9x", "No emulator called snes9x"), ("fbneo", "FBNeo")]
+)
+def test_an_emulator_that_cannot_run_games_here_changes_nothing(home, emulator, says):
+    stock_drop(home, "alpha")  # no FBNeo set list configured
+    result = tune("Alpha Blaster", "--emulator", emulator)
+    assert result.exit_code == 1
+    assert says in result.output and "Saved." not in result.output
+    assert choices() == [] and tunings() == []
+
+
+def test_an_unknown_emulator_is_refused_with_fbneo_configured_too(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    assert tune("Alpha Blaster", "--emulator", "FBNeo").exit_code == 1
+    assert choices() == [] and tunings() == []
+
+
+def test_the_choice_survives_a_rescan(with_fbneo):
+    stock_drop(with_fbneo, "alpha")
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert run("rescan").exit_code == 0
+    assert choices() == [("alpha", "fbneo")]

@@ -10,12 +10,13 @@ import typer
 
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.arrivals import arrived_since, window_start
+from infiltrator.catalogue.emulators import choose_emulator
 from infiltrator.catalogue.games import sync_games
 from infiltrator.catalogue.issues import list_issues, log_issue
 from infiltrator.catalogue.tuning import set_tuning
 from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start_demo, tv_persona
 from infiltrator.config import Settings, load_settings
-from infiltrator.dat import DEFAULT_EMULATOR, Dat
+from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, IS_BIOS, Dat
 from infiltrator.dats import default_wanted, load_dats
 from infiltrator.library import move_flat_library
 from infiltrator.metadata import load_metadata
@@ -466,17 +467,49 @@ def issue_list(verbose: Verbose = False) -> None:
         typer.echo(f"{row['at'][:10]}  {name}{extra} on {row['device']}: {row['note']}")
 
 
+def _emulator_refusal(settings: Settings, emulator: str) -> str | None:
+    """Why a game can't be put on this emulator here; None when it can."""
+    if emulator not in IS_BIOS:
+        return f"No emulator called {emulator}. Try: {', '.join(IS_BIOS)}"
+    if emulator == FBNEO and settings.fbneo_dat_path is None:
+        return "FBNeo isn't set up here."
+    return None
+
+
+def _family_of(conn: sqlite3.Connection, set_name: str) -> str:
+    """The game a MAME 2003-Plus set is a version of."""
+    row = conn.execute(
+        "SELECT family FROM games WHERE emulator = ? AND set_name = ?",
+        (DEFAULT_EMULATOR, set_name),
+    ).fetchone()
+    return row["family"]
+
+
+EmulatorOption = Annotated[
+    str | None,
+    typer.Option(help=f"Run the game on this emulator from now on: {', '.join(IS_BIOS)}."),
+]
+
+
 @tune_app.command("set")
 def tune_set(
     game: str,
     device: Annotated[str, typer.Option(help="Which TV or box.")],
     settings: Annotated[str, typer.Option(help="The remap or settings that fixed it.")],
+    emulator: EmulatorOption = None,
 ) -> None:
     """A tuned game counts as playable on that pad, whatever MAME lists its control as."""
-    conn = _db(_settings())
+    config = _settings()
+    conn = _db(config)
+    refusal = None if emulator is None else _emulator_refusal(config, emulator)
+    if refusal is not None:
+        typer.echo(refusal)
+        raise typer.Exit(1)
     set_name = _set_for_title(conn, game)
     if set_name is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
     set_tuning(conn, DEFAULT_EMULATOR, set_name, device, settings)
+    if emulator is not None:
+        choose_emulator(conn, _family_of(conn, set_name), emulator)
     typer.echo("Saved.")
