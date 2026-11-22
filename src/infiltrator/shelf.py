@@ -116,9 +116,8 @@ def rotate(
     """
     ranked = _ranked(conn, p)
     over_cap = sum(is_must_have(p, g["title"]) for g in ranked) >= size
-    shelf = sorted(current_shelf(conn, p.name), key=lambda g: (g["placed_at"], g["set_name"]))
-    retirable = [g for g in shelf if over_cap or not is_must_have(p, g["title"])]
-    out = retirable[:count]
+    shelf = current_shelf(conn, p.name)
+    out = _retirable(shelf, p, over_cap)[:count]
     taken = {g["family"] for g in shelf}
     incoming = [
         g
@@ -185,102 +184,69 @@ def fill_demo_shelf(
     return _fill(conn, p, size, _ranked_arrivals(conn, p, arrived), now())
 
 
-def _pick_leaver(conn: sqlite3.Connection, p: Persona) -> str | None:
-    """The set_name of the longest-shelved non-must-have on the shelf.
+def _retirable(shelf: list[sqlite3.Row], p: Persona, over_cap: bool) -> list[sqlite3.Row]:
+    """What may leave, longest-shelved first. Must-haves stay unless they outnumber the shelf."""
+    oldest_first = sorted(shelf, key=lambda g: (g["placed_at"], g["set_name"]))
+    return [g for g in oldest_first if over_cap or not is_must_have(p, g["title"])]
 
-    Returns None if the shelf is empty or all games are must-haves.
-    Uses the same logic as rotate: oldest placed_at among non-must-haves.
+
+def _titled(conn: sqlite3.Connection, p: Persona, title: str) -> list[sqlite3.Row]:
+    """Every version of the game so titled that this persona could play, dropped or not."""
+    wanted = title.casefold()
+    rows = [g for g in eligible(conn, p, ignore_drops=True) if g["title"].casefold() == wanted]
+    if not rows:
+        raise LookupError(f"no game called {title!r} that {p.name} can play")
+    return rows
+
+
+def drop(conn: sqlite3.Connection, p: Persona, title: str, now: Callable[[], str] = utcnow) -> str:
+    """Take a game off the shelf and keep it off: no fill, build or rotate brings it back.
+
+    Works whether or not the game is on the shelf now. Returns its title as the catalogue has it.
     """
-    shelf = current_shelf(conn, p.name)
-    retirable = [g for g in shelf if not is_must_have(p, g["title"])]
-    if not retirable:
-        return None
-    return min(retirable, key=lambda g: (g["placed_at"], g["set_name"]))["set_name"]
-
-
-def drop(conn: sqlite3.Connection, p: Persona, title: str, now: Callable[[], str] = utcnow) -> None:
-    """Drop a game off the shelf by title.
-
-    The game must be on the shelf already. Its family is recorded in shelf_drops
-    so it won't be offered in future shelf operations.
-    """
-    game = conn.execute(
-        "SELECT family, set_name FROM games WHERE title = ? COLLATE NOCASE", (title,)
-    ).fetchone()
-    if game is None:
-        raise ValueError(f"Game not found: {title}")
-
-    # Get current shelf
-    shelf = current_shelf(conn, p.name)
-    if not shelf:
-        raise ValueError(f"Game not on shelf: {title}")
-
-    # Check if the game is on the shelf
-    game_on_shelf = next((g for g in shelf if g["set_name"] == game["set_name"]), None)
-    if game_on_shelf is None:
-        raise ValueError(f"Game not on shelf: {title}")
-
-    # Drop it from the shelf
-    wanted = [g["set_name"] for g in shelf if g["set_name"] != game["set_name"]]
-    _replace_shelf(conn, p.name, wanted, now())
-
-    # Record the drop in shelf_drops
+    rows = _titled(conn, p, title)
+    families = {g["family"] for g in rows}
+    at = now()
     with conn:
-        conn.execute(
+        conn.executemany(
             "INSERT OR REPLACE INTO shelf_drops (persona, family, at) VALUES (?, ?, ?)",
-            (p.name, game["family"], now()),
+            [(p.name, family, at) for family in sorted(families)],
         )
+    staying = [g["set_name"] for g in current_shelf(conn, p.name) if g["family"] not in families]
+    _replace_shelf(conn, p.name, staying, at)
+    return rows[0]["title"]
+
+
+def _leaving_for(
+    conn: sqlite3.Connection, p: Persona, shelf: list[sqlite3.Row], game: sqlite3.Row, size: int
+) -> list[sqlite3.Row]:
+    """What makes room for `game`: its other version, or the longest-shelved on a full shelf."""
+    same_game = [g for g in shelf if g["family"] == game["family"]]
+    if same_game or len(shelf) < size:
+        return same_game
+    over_cap = sum(is_must_have(p, g["title"]) for g in _ranked(conn, p)) >= size
+    retirable = _retirable(shelf, p, over_cap)
+    if not retirable:
+        raise LookupError("the shelf is full and nothing on it may leave")
+    return retirable[:1]
 
 
 def add(
-    conn: sqlite3.Connection,
-    p: Persona,
-    title: str,
-    size: int,
-    now: Callable[[], str] = utcnow,
-) -> None:
-    """Add a game to the shelf by title.
+    conn: sqlite3.Connection, p: Persona, title: str, size: int, now: Callable[[], str] = utcnow
+) -> tuple[list[str], list[str]]:
+    """Put a game on the shelf, forgetting it was ever dropped. Returns (sets out, sets in).
 
-    If a different version of the same family is already on the shelf, it's swapped.
-    If the shelf is full, the longest-shelved non-must-have leaves.
-    If the game's family was dropped, the drop is forgotten.
+    Its other version leaves if one is shelved; otherwise, on a full shelf, the game `rotate`
+    would retire first.
     """
-    game = conn.execute(
-        "SELECT family, set_name FROM games WHERE title = ? COLLATE NOCASE", (title,)
-    ).fetchone()
-    if game is None:
-        raise ValueError(f"Game not found: {title}")
-
-    # Check eligibility (but not drops, so we can re-add dropped games)
-    # We check the unfiltered eligible list to allow any version of a game
-    all_eligible = eligible(conn, p, ignore_drops=True)
-    if not any(g["set_name"] == game["set_name"] for g in all_eligible):
-        raise ValueError(f"Game not eligible: {title}")
-
+    game = _family_choice(_titled(conn, p, title), p)
     shelf = current_shelf(conn, p.name)
-    taken = {g["family"] for g in shelf}
-
-    # If same family is on shelf, swap it
-    if game["family"] in taken:
-        wanted = [g["set_name"] for g in shelf if g["family"] != game["family"]]
-        wanted.append(game["set_name"])
-    # If shelf is full, remove the leaver
-    elif len(shelf) >= size:
-        leaver = _pick_leaver(conn, p)
-        if leaver is None:
-            # Shelf is full of must-haves; can't add
-            raise ValueError(f"Shelf is full of must-haves: cannot add {title}")
-        wanted = [g["set_name"] for g in shelf if g["set_name"] != leaver]
-        wanted.append(game["set_name"])
-    # Shelf has room
-    else:
-        wanted = [g["set_name"] for g in shelf] + [game["set_name"]]
-
-    _replace_shelf(conn, p.name, wanted, now())
-
-    # Forget that this game was dropped
+    leaving = {g["set_name"] for g in _leaving_for(conn, p, shelf, game, size)} - {game["set_name"]}
+    already = any(g["set_name"] == game["set_name"] for g in shelf)
     with conn:
         conn.execute(
-            "DELETE FROM shelf_drops WHERE persona = ? AND family = ?",
-            (p.name, game["family"]),
+            "DELETE FROM shelf_drops WHERE persona = ? AND family = ?", (p.name, game["family"])
         )
+    wanted = [g["set_name"] for g in shelf if g["set_name"] not in leaving]
+    _replace_shelf(conn, p.name, wanted + ([] if already else [game["set_name"]]), now())
+    return sorted(leaving), [] if already else [game["set_name"]]

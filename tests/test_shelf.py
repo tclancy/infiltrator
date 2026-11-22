@@ -6,9 +6,11 @@ from test_personas import add_game
 from infiltrator.catalogue import connect
 from infiltrator.personas import Persona, save_persona
 from infiltrator.shelf import (
+    add,
     build_shelf,
     current_shelf,
     demo_shelf,
+    drop,
     fill_demo_shelf,
     fill_shelf,
     rotate,
@@ -253,7 +255,6 @@ def test_a_dropped_game_comes_off_the_shelf(conn):
     build_shelf(conn, tom, 6, now=tick)
     before = shelf_names(conn)
     assert "game00" in before
-    from infiltrator.shelf import drop
 
     drop(conn, tom, "Game00", now=tick)
     after = shelf_names(conn)
@@ -267,7 +268,6 @@ def test_drop_records_off_in_shelf_history(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import drop
 
     drop(conn, tom, "Game00", now=tick)
     rows = conn.execute(
@@ -282,7 +282,6 @@ def test_drop_records_to_shelf_drops(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import drop
 
     drop(conn, tom, "Game00", now=tick)
     rows = conn.execute(
@@ -299,7 +298,6 @@ def test_a_dropped_game_stays_off_through_fill_build_and_rotate(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import drop
 
     # game00 is highest quality and will return; drop it
     drop(conn, tom, "Game00", now=tick)
@@ -321,7 +319,6 @@ def test_add_puts_a_game_on_the_shelf(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import add, drop
 
     # Drop a game
     drop(conn, tom, "Game00", now=tick)
@@ -337,7 +334,6 @@ def test_add_removes_the_drop_record(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import add, drop
 
     drop(conn, tom, "Game00", now=tick)
     rows = conn.execute(
@@ -359,7 +355,6 @@ def test_a_dropped_then_added_game_stays_on_through_fill(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import add, drop
 
     # Drop and add back
     drop(conn, tom, "Game00", now=tick)
@@ -380,7 +375,6 @@ def test_add_to_full_shelf_removes_longest_shelved(conn):
     shelf_before = current_shelf(conn, "tom")
     # Find the oldest shelved game that's not a must-have
     oldest = min(shelf_before, key=lambda g: g["placed_at"])
-    from infiltrator.shelf import add
 
     # Add a new game that's not on the shelf
     add(conn, tom, "Game06", 6, now=tick)
@@ -404,7 +398,6 @@ def test_add_to_shelf_with_must_haves_respects_them(conn):
     shelf_before = current_shelf(conn, "tom")
     non_must_haves = [g for g in shelf_before if g["set_name"] != "fave"]
     oldest_other = min(non_must_haves, key=lambda g: g["placed_at"])
-    from infiltrator.shelf import add
 
     add(conn, tom, "Game06", 6, now=tick)
     after = shelf_names(conn)
@@ -419,7 +412,6 @@ def test_add_matches_title_case_insensitive(conn):
     tom = P(conn, "tom")
     tick = clock()
     build_shelf(conn, tom, 6, now=tick)
-    from infiltrator.shelf import add
 
     # Even though we ask for lowercase, it should work
     add(conn, tom, "puckman", 6, now=tick)
@@ -436,9 +428,81 @@ def test_add_swaps_versions_of_same_family(conn):
     shelf = shelf_names(conn)
     assert "puckman" in shelf
     assert "pacman" not in shelf
-    from infiltrator.shelf import add
 
     add(conn, tom, "Pac-Man", 6, now=tick)
     shelf_after = shelf_names(conn)
     assert "pacman" in shelf_after
     assert "puckman" not in shelf_after
+
+
+def test_dropping_a_game_that_is_not_on_the_shelf_still_keeps_it_off(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 3, now=tick)
+    waiting = next(f"game{i:02d}" for i in range(8) if f"game{i:02d}" not in shelf_names(conn))
+    before = shelf_names(conn)
+
+    drop(conn, tom, waiting.title(), now=tick)
+
+    assert shelf_names(conn) == before
+    rotate(conn, tom, 3, count=3, now=tick)
+    build_shelf(conn, tom, 8, now=tick)
+    assert waiting not in shelf_names(conn)
+
+
+def test_drop_takes_off_whichever_version_of_the_game_is_shelved(conn):
+    # Two playable versions share a title; the shelved one (the parent) is not first by set name.
+    add_game(conn, "zbarrel", title="Barrel")
+    add_game(conn, "abarrel", family="zbarrel", parent="zbarrel", title="Barrel")
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    assert shelf_names(conn) == ["zbarrel"]
+
+    assert drop(conn, tom, "barrel", now=tick) == "Barrel"
+
+    assert shelf_names(conn) == []
+    build_shelf(conn, tom, 6, now=tick)
+    assert shelf_names(conn) == []
+
+
+def test_add_picks_the_version_the_persona_would_be_given(conn):
+    add_game(conn, "zbarrel", title="Barrel")
+    add_game(conn, "abarrel", family="zbarrel", parent="zbarrel", title="Barrel")
+    tom = P(conn, "tom")
+
+    assert add(conn, tom, "BARREL", 6, now=clock()) == ([], ["zbarrel"])
+    assert shelf_names(conn) == ["zbarrel"]
+
+
+def test_adding_a_game_that_is_already_shelved_changes_nothing(conn):
+    stock(conn, 4)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 4, now=tick)
+    history = conn.execute("SELECT COUNT(*) FROM shelf_history").fetchone()[0]
+
+    assert add(conn, tom, "Game01", 4, now=tick) == ([], [])
+
+    assert conn.execute("SELECT COUNT(*) FROM shelf_history").fetchone()[0] == history
+
+
+def test_on_a_shelf_of_nothing_but_must_haves_add_bumps_the_longest_shelved_one(conn):
+    # As rotate does: must-haves only stay put while there is something else to retire.
+    add_game(conn, "fave", title="Fave")
+    add_game(conn, "other", title="Other")
+    tom = P(conn, "tom", must_haves=("Fave",))
+    tick = clock()
+    build_shelf(conn, tom, 1, now=tick)
+
+    assert add(conn, tom, "Other", 1, now=tick) == (["fave"], ["other"])
+
+
+def test_a_title_nobody_has_is_refused_by_both(conn):
+    stock(conn, 2)
+    tom = P(conn, "tom")
+    for change in (lambda: drop(conn, tom, "Nope"), lambda: add(conn, tom, "Nope", 6)):
+        with pytest.raises(LookupError):
+            change()
+    assert conn.execute("SELECT COUNT(*) FROM shelf_drops").fetchone()[0] == 0
