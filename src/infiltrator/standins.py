@@ -1,9 +1,11 @@
 """Which FBNeo sets stand in for a MAME 2003-Plus game, worked out from the two set lists.
 
 A person thinks in games, and a game is a MAME family. The FBNeo sets that "stand in" for a
-family are the ones that share at least one ROM with any set of it, matched by size and CRC
-(the only identity FBNeo's list gives a ROM). A ROM some BIOS set holds, in either list, does
-not count: every Neo Geo game shares the Neo Geo BIOS, and that makes none of them the same game.
+family are the ones that have at least half their own ROMs in common with the sets of it,
+matched by size and CRC (the only identity FBNeo's list gives a ROM). A ROM some BIOS set
+holds, in either list, does not count: every Neo Geo game shares the Neo Geo BIOS, and that
+makes none of them the same game. Half, not one: boards share colour PROMs and sound ROMs, and
+on the real lists "shares any ROM" gave Pac-Man 202 stand-ins.
 
 Nothing here is stored. It is derived from the two DATs each time, through one index per call,
 so the work grows with the size of the lists, never with their product.
@@ -53,16 +55,28 @@ def sets_by_key(fbneo: Dat, ignore: frozenset[Key]) -> dict[Key, frozenset[str]]
     return {key: frozenset(names) for key, names in index.items()}
 
 
-def shared_roms(mame: Dat, fbneo: Dat) -> dict[str, Counter[str]]:
-    """FBNeo set → how many ROMs it shares with each MAME family it shares any with."""
-    ignore = bios_keys(mame, fbneo)
-    index = sets_by_key(fbneo, ignore)
+def _counted(mame: Dat, index: dict[Key, frozenset[str]], ignore: frozenset[Key]):
+    """FBNeo set → how many ROMs it has in common with each MAME family, however few."""
     shared: dict[str, Counter[str]] = defaultdict(Counter)
     for family, keys in family_keys(mame, ignore).items():
         for key in keys:
             for name in index.get(key, ()):
                 shared[name][family] += 1
-    return dict(shared)
+    return shared
+
+
+def _mostly(counts: Counter[str], own: int) -> Counter[str]:
+    """Only the families this set has at least half of its own ROMs in common with."""
+    return Counter({family: n for family, n in counts.items() if 2 * n >= own})
+
+
+def shared_roms(mame: Dat, fbneo: Dat) -> dict[str, Counter[str]]:
+    """FBNeo set → the MAME families it is mostly made of, with how many ROMs they share."""
+    ignore = bios_keys(mame, fbneo)
+    index = sets_by_key(fbneo, ignore)
+    own = Counter(name for names in index.values() for name in names)  # ROMs per FBNeo set
+    mostly = {n: _mostly(counts, own[n]) for n, counts in _counted(mame, index, ignore).items()}
+    return {name: counts for name, counts in mostly.items() if counts}
 
 
 def standins(

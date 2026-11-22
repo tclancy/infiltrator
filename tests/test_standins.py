@@ -81,12 +81,22 @@ def test_clones_count_for_their_family():
 def test_the_inverse_picks_the_family_sharing_the_most_roms():
     mame = dat(
         DEFAULT_EMULATOR,
-        game("few", rom("1", 8, "00000001")),
-        game("many", rom("2", 8, "00000002"), rom("3", 8, "00000003")),
+        game("few", rom("1", 8, "00000001"), rom("2", 8, "00000002")),
+        game("many", *(rom(n, 8, f"0000000{n}") for n in "234")),
     )
-    fbneo = dat(FBNEO, game("fb", *(rom(n, 8, f"0000000{n}") for n in "123")))
+    fbneo = dat(FBNEO, game("fb", *(rom(n, 8, f"0000000{n}") for n in "1234")))
     assert standins(mame, fbneo) == {"few": {"fb"}, "many": {"fb"}}
     assert stands_in_for(mame, fbneo) == {"fb": "many"}
+
+
+def test_a_set_with_under_half_its_roms_in_common_is_not_a_stand_in():
+    # Boards share colour PROMs and sound ROMs; one ROM in common does not make two games one.
+    mame = dat(DEFAULT_EMULATOR, game("pac", rom("prom", 8, "00000001"), rom("p", 8, "000000aa")))
+    other = game("other", *(rom(n, 8, f"0000000{n}") for n in "123"))
+    half = game("half", rom("prom", 8, "00000001"), rom("x", 8, "000000bb"))
+    fbneo = dat(FBNEO, other, half)
+    assert standins(mame, fbneo) == {"pac": {"half"}}
+    assert stands_in_for(mame, fbneo) == {"half": "pac"}
 
 
 def test_the_inverse_breaks_a_tie_by_family_name():
