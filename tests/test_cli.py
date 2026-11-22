@@ -812,7 +812,7 @@ def test_tune_set_to_fbneo_says_so_when_no_fbneo_set_can_be_built(fbneo_home):
     stock_drop(fbneo_home, "delta")
     result = tune("Delta", "--emulator", "fbneo")
     assert result.exit_code == 0, result.output
-    assert "No fbneo set for it yet" in result.output
+    assert "Not on fbneo yet" in result.output
     assert choices() == [("delta", "fbneo")]
 
 

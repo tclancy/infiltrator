@@ -560,4 +560,4 @@ def _follow_choice(
         typer.echo("The TV will catch up shortly.")
         return
     if not _on_emulator(conn, family, emulator):
-        typer.echo(f"No {emulator} set for it yet: the library doesn't hold all its chips.")
+        typer.echo(f"Not on {emulator} yet: the next sieve builds it once its chips are in.")
