@@ -243,3 +243,202 @@ def test_demo_shelf_shows_a_new_clone_of_an_old_game(conn):
     add_game(conn, "pacman", title="Pac-Man", family="puckman", parent="puckman", quality_tier=9)
     tom = P(conn, "tom", language=None)
     assert demo_shelf(conn, tom, 6, {"pacman"}) == ["pacman"]
+
+
+# Requirement 1: drop takes a game off the shelf and records a drop row
+def test_a_dropped_game_comes_off_the_shelf(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    before = shelf_names(conn)
+    assert "game00" in before
+    from infiltrator.shelf import drop
+
+    drop(conn, tom, "Game00", now=tick)
+    after = shelf_names(conn)
+    assert "game00" not in after
+    assert len(after) == 5
+
+
+# Requirement 1: drops are recorded in shelf_history as off
+def test_drop_records_off_in_shelf_history(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import drop
+
+    drop(conn, tom, "Game00", now=tick)
+    rows = conn.execute(
+        "SELECT action, set_name FROM shelf_history WHERE set_name = 'game00' ORDER BY at"
+    ).fetchall()
+    assert [r["action"] for r in rows] == ["on", "off"]
+
+
+# Requirement 1: drops create a row in shelf_drops
+def test_drop_records_to_shelf_drops(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import drop
+
+    drop(conn, tom, "Game00", now=tick)
+    rows = conn.execute(
+        "SELECT family FROM shelf_drops WHERE persona = ? AND family = ?",
+        ("tom", "game00"),
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["family"] == "game00"
+
+
+# Requirement 2: a dropped game stays off through fill, build, and rotate
+def test_a_dropped_game_stays_off_through_fill_build_and_rotate(conn):
+    stock(conn, 10)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import drop
+
+    # game00 is highest quality and will return; drop it
+    drop(conn, tom, "Game00", now=tick)
+    assert "game00" not in shelf_names(conn)
+    # Try to bring it back via fill
+    fill_shelf(conn, tom, 6, now=tick)
+    assert "game00" not in shelf_names(conn)
+    # Try to bring it back via build
+    build_shelf(conn, tom, 6, now=tick)
+    assert "game00" not in shelf_names(conn)
+    # Try to bring it back via rotate
+    rotate(conn, tom, 6, count=6, now=tick)
+    assert "game00" not in shelf_names(conn)
+
+
+# Requirement 3: add puts a game on the shelf and forgets the drop
+def test_add_puts_a_game_on_the_shelf(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import add, drop
+
+    # Drop a game
+    drop(conn, tom, "Game00", now=tick)
+    assert "game00" not in shelf_names(conn)
+    # Add it back
+    add(conn, tom, "Game00", 6, now=tick)
+    assert "game00" in shelf_names(conn)
+
+
+# Requirement 3: add forgets that a game was dropped
+def test_add_removes_the_drop_record(conn):
+    stock(conn, 8)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import add, drop
+
+    drop(conn, tom, "Game00", now=tick)
+    rows = conn.execute(
+        "SELECT family FROM shelf_drops WHERE persona = ? AND family = ?",
+        ("tom", "game00"),
+    ).fetchall()
+    assert len(rows) == 1
+    add(conn, tom, "Game00", 6, now=tick)
+    rows = conn.execute(
+        "SELECT family FROM shelf_drops WHERE persona = ? AND family = ?",
+        ("tom", "game00"),
+    ).fetchall()
+    assert len(rows) == 0
+
+
+# Requirement 3: a dropped then added game stays on through fill
+def test_a_dropped_then_added_game_stays_on_through_fill(conn):
+    stock(conn, 10)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import add, drop
+
+    # Drop and add back
+    drop(conn, tom, "Game00", now=tick)
+    add(conn, tom, "Game00", 6, now=tick)
+    before = shelf_names(conn)
+    assert "game00" in before
+    # fill_shelf shouldn't change anything
+    fill_shelf(conn, tom, 6, now=tick)
+    assert shelf_names(conn) == before
+
+
+# Requirement 4: adding to full shelf removes the longest-shelved non-must-have
+def test_add_to_full_shelf_removes_longest_shelved(conn):
+    stock(conn, 10)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    shelf_before = current_shelf(conn, "tom")
+    # Find the oldest shelved game that's not a must-have
+    oldest = min(shelf_before, key=lambda g: g["placed_at"])
+    from infiltrator.shelf import add
+
+    # Add a new game that's not on the shelf
+    add(conn, tom, "Game06", 6, now=tick)
+    # oldest should be gone, game06 should be on
+    assert "game06" in shelf_names(conn)
+    assert oldest["set_name"] not in shelf_names(conn)
+    assert len(current_shelf(conn, "tom")) == 6
+
+
+# Requirement 4: add with must-haves removes oldest non-must-have
+def test_add_to_shelf_with_must_haves_respects_them(conn):
+    # Create a must-have that's the oldest shelved
+    add_game(conn, "fave", title="Fave Game", quality_tier=1)
+    stock(conn, 10)
+    tom = P(conn, "tom", must_haves=("Fave Game",))
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    before = shelf_names(conn)
+    assert "fave" in before
+    # Find the oldest non-must-have
+    shelf_before = current_shelf(conn, "tom")
+    non_must_haves = [g for g in shelf_before if g["set_name"] != "fave"]
+    oldest_other = min(non_must_haves, key=lambda g: g["placed_at"])
+    from infiltrator.shelf import add
+
+    add(conn, tom, "Game06", 6, now=tick)
+    after = shelf_names(conn)
+    assert "fave" in after
+    assert "game06" in after
+    assert oldest_other["set_name"] not in after
+
+
+# Requirement 5: title is matched case-insensitive
+def test_add_matches_title_case_insensitive(conn):
+    add_game(conn, "puckman", title="PuckMan", family="puckman", quality_tier=9)
+    tom = P(conn, "tom")
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    from infiltrator.shelf import add
+
+    # Even though we ask for lowercase, it should work
+    add(conn, tom, "puckman", 6, now=tick)
+    assert "puckman" in shelf_names(conn)
+
+
+# Requirement 5: adding a game with same family swaps versions
+def test_add_swaps_versions_of_same_family(conn):
+    add_game(conn, "puckman", title="PuckMan", family="puckman", quality_tier=9)
+    add_game(conn, "pacman", title="Pac-Man", family="puckman", parent="puckman", quality_tier=9)
+    tom = P(conn, "tom", language=None)
+    tick = clock()
+    build_shelf(conn, tom, 6, now=tick)
+    shelf = shelf_names(conn)
+    assert "puckman" in shelf
+    assert "pacman" not in shelf
+    from infiltrator.shelf import add
+
+    add(conn, tom, "Pac-Man", 6, now=tick)
+    shelf_after = shelf_names(conn)
+    assert "pacman" in shelf_after
+    assert "puckman" not in shelf_after

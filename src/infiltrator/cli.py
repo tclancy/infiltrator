@@ -29,9 +29,11 @@ from infiltrator.personas import (
 )
 from infiltrator.safety import DropFolderBusy
 from infiltrator.shelf import (
+    add,
     build_shelf,
     current_shelf,
     demo_shelf,
+    drop,
     fill_demo_shelf,
     fill_shelf,
     rotate,
@@ -330,6 +332,44 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
 
+@shelf_app.command("drop")
+def shelf_drop(persona: str, title: str) -> None:
+    """Take a game off the shelf and remember not to offer it again."""
+    settings = _settings()
+    conn = _db(settings)
+    _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        set_name = _set_for_title_eligible(conn, persona, title)
+        if set_name is None:
+            raise ValueError(f"Game not found: {title}")
+        who = load_persona(conn, persona)
+        drop(conn, who, title)
+    game_title = conn.execute("SELECT title FROM games WHERE set_name = ?", (set_name,)).fetchone()[
+        "title"
+    ]
+    typer.echo(game_title)
+    _tell_romm_or_shrug(settings, conn, verbose=False)
+
+
+@shelf_app.command("add")
+def shelf_add(persona: str, title: str) -> None:
+    """Put a game on the shelf, or swap a version of one that's already there."""
+    settings = _settings()
+    conn = _db(settings)
+    _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        set_name = _set_for_title_eligible(conn, persona, title)
+        if set_name is None:
+            raise ValueError(f"Game not found: {title}")
+        who = load_persona(conn, persona)
+        add(conn, who, title, settings.shelf_size)
+    game_title = conn.execute("SELECT title FROM games WHERE set_name = ?", (set_name,)).fetchone()[
+        "title"
+    ]
+    typer.echo(game_title)
+    _tell_romm_or_shrug(settings, conn, verbose=False)
+
+
 def _set_for_title(conn: sqlite3.Connection, game_title: str) -> str | None:
     rows = conn.execute(
         "SELECT g.set_name, g.parent, EXISTS(SELECT 1 FROM shelf s WHERE s.set_name = g.set_name) "
@@ -340,6 +380,34 @@ def _set_for_title(conn: sqlite3.Connection, game_title: str) -> str | None:
         return None
     best = min(rows, key=lambda r: (not r["shelved"], r["parent"] is not None, r["set_name"]))
     return best["set_name"]
+
+
+def _set_for_title_eligible(conn: sqlite3.Connection, persona: str, game_title: str) -> str | None:
+    """Find a game by title that is eligible for a persona, ignoring drops.
+
+    Returns the set_name if found and eligible, None if not found or not eligible.
+    Raises an exception (caught by _or_try_again_later) if ineligible due to being dropped.
+    """
+    from infiltrator.personas import eligible, load_persona
+
+    p = load_persona(conn, persona)
+    # Find matching games
+    rows = conn.execute(
+        "SELECT set_name, family FROM games WHERE title = ? COLLATE NOCASE", (game_title,)
+    ).fetchall()
+    if not rows:
+        return None
+
+    # Check if any version is eligible
+    eligible_games = eligible(conn, p, ignore_drops=True)
+    for game in rows:
+        if any(g["set_name"] == game["set_name"] for g in eligible_games):
+            return game["set_name"]
+
+    # Not eligible; raise an error so the CLI reports "Try again later!"
+    raise ValueError(
+        f"Not eligible: {game_title}"
+    )  # Will be caught and reported as "Try again later!"
 
 
 @issue_app.command("log")

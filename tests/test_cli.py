@@ -401,3 +401,163 @@ def test_days_without_new_is_refused(home, tv):
     result = run("play", "tom", "--days", "2")
     assert result.exit_code != 0
     assert "--new" in result.output
+
+
+# Requirement 6: drop returns Try again later! for non-existent game
+def test_shelf_drop_nonexistent_game_is_try_again_later(home):
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run("shelf", "drop", "tom", "Nonexistent Game")
+    assert result.exit_code == 1
+    assert result.output.strip() == "Try again later!"
+
+
+# Requirement 6: drop returns Try again later! for ineligible game
+def test_shelf_drop_ineligible_game_is_try_again_later(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    # Create an ineligible game
+    from test_personas import add_game
+
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    add_game(conn, "dial_game", control="dial", title="Dial Game")
+    conn.close()
+    result = run("shelf", "drop", "tom", "Dial Game")
+    assert result.exit_code == 1
+    assert result.output.strip() == "Try again later!"
+
+
+# Requirement 1&6: drop prints the title on success
+def test_shelf_drop_prints_title_on_success(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("shelf", "build", "tom")
+    result = run("shelf", "drop", "tom", "Alpha Blaster")
+    assert result.exit_code == 0, result.output
+    assert "Alpha Blaster" in result.output
+
+
+# Requirement 7: drop for one persona changes no other persona's shelf
+def test_shelf_drop_for_one_persona_leaves_others_alone(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("persona", "add", "kids", input="\n\n\n\n\n\n")
+    run("shelf", "build", "tom")
+    run("shelf", "build", "kids")
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    before_kids = sorted(
+        r["set_name"] for r in conn.execute("SELECT set_name FROM shelf WHERE persona = 'kids'")
+    )
+    conn.close()
+    run("shelf", "drop", "tom", "Alpha Blaster")
+    conn = connect(load_settings().db_path)
+    after_kids = sorted(
+        r["set_name"] for r in conn.execute("SELECT set_name FROM shelf WHERE persona = 'kids'")
+    )
+    conn.close()
+    assert before_kids == after_kids
+
+
+# Requirement 8: drop of TV persona changes the TV
+def test_shelf_drop_of_tv_persona_changes_the_tv(home, tv):
+    shelf, refreshed = tv
+    stock_drop(home, "alpha", "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    assert on_tv(shelf) == ["alpha", "delta"]
+    result = run("shelf", "drop", "tom", "Alpha Blaster")
+    assert result.exit_code == 0, result.output
+    # alpha should be gone from TV
+    assert on_tv(shelf) == ["delta"]
+    assert "arcade" in refreshed
+
+
+# Requirement 6: add returns Try again later! for non-existent game
+def test_shelf_add_nonexistent_game_is_try_again_later(home):
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    result = run("shelf", "add", "tom", "Nonexistent Game")
+    assert result.exit_code == 1
+    assert result.output.strip() == "Try again later!"
+
+
+# Requirement 6: add returns Try again later! for ineligible game
+def test_shelf_add_ineligible_game_is_try_again_later(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    from test_personas import add_game
+
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    add_game(conn, "dial_game", control="dial", title="Dial Game")
+    conn.close()
+    result = run("shelf", "add", "tom", "Dial Game")
+    assert result.exit_code == 1
+    assert result.output.strip() == "Try again later!"
+
+
+# Requirement 3&6: add prints the title on success
+def test_shelf_add_prints_title_on_success(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    make_zip(home / "delta.zip", chips_for("delta"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("shelf", "build", "tom")
+    # Drop a game first
+    run("shelf", "drop", "tom", "Alpha Blaster")
+    result = run("shelf", "add", "tom", "Alpha Blaster")
+    assert result.exit_code == 0, result.output
+    assert "Alpha Blaster" in result.output
+
+
+# Requirement 7: add for one persona changes no other persona's shelf
+def test_shelf_add_for_one_persona_leaves_others_alone(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    make_zip(home / "delta.zip", chips_for("delta"))
+    run("sieve")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("persona", "add", "kids", input="\n\n\n\n\n\n")
+    run("shelf", "build", "tom")
+    run("shelf", "build", "kids")
+    from infiltrator.catalogue import connect
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    before_kids = sorted(
+        r["set_name"] for r in conn.execute("SELECT set_name FROM shelf WHERE persona = 'kids'")
+    )
+    conn.close()
+    run("shelf", "drop", "tom", "Alpha Blaster")
+    run("shelf", "add", "tom", "Alpha Blaster")
+    conn = connect(load_settings().db_path)
+    after_kids = sorted(
+        r["set_name"] for r in conn.execute("SELECT set_name FROM shelf WHERE persona = 'kids'")
+    )
+    conn.close()
+    assert before_kids == after_kids
+
+
+# Requirement 8: add of TV persona changes the TV
+def test_shelf_add_of_tv_persona_changes_the_tv(home, tv):
+    shelf, refreshed = tv
+    stock_drop(home, "alpha", "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    run("play", "tom")
+    assert on_tv(shelf) == ["alpha", "delta"]
+    run("shelf", "drop", "tom", "Alpha Blaster")
+    assert on_tv(shelf) == ["delta"]
+    result = run("shelf", "add", "tom", "Alpha Blaster")
+    assert result.exit_code == 0, result.output
+    # alpha should be back on TV
+    assert on_tv(shelf) == ["alpha", "delta"]
+    assert refreshed.count("arcade") >= 2

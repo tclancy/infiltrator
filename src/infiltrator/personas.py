@@ -87,13 +87,21 @@ def _suitable(p: Persona, game: sqlite3.Row) -> bool:
     return p.mature_ok or game["mature"] != 1
 
 
-def eligible(conn: sqlite3.Connection, p: Persona) -> list[sqlite3.Row]:
+def _dropped_families(conn: sqlite3.Connection, persona: str) -> set[str]:
+    """The families that this persona has dropped; these won't be offered."""
+    rows = conn.execute("SELECT family FROM shelf_drops WHERE persona = ?", (persona,))
+    return {r["family"] for r in rows}
+
+
+def eligible(conn: sqlite3.Connection, p: Persona, ignore_drops: bool = False) -> list[sqlite3.Row]:
     games = conn.execute("SELECT * FROM games WHERE is_bios = 0 ORDER BY set_name").fetchall()
     tuned = tuned_sets(conn)
+    dropped = set() if ignore_drops else _dropped_families(conn, p.name)
     return [
         g
         for g in games
-        if _playable(p, g, tuned)
+        if g["family"] not in dropped
+        and _playable(p, g, tuned)
         and _players_ok(p, g["players"])
         and (is_must_have(p, g["title"]) or _suitable(p, g))
     ]
