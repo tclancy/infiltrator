@@ -1,5 +1,6 @@
 from infiltrator.catalogue import connect
-from infiltrator.catalogue.issues import list_issues, log_issue
+from infiltrator.catalogue.issues import issues_for, list_issues, log_issue
+from infiltrator.dat import DEFAULT_EMULATOR
 
 TABLES = {
     "games",
@@ -22,7 +23,7 @@ def _tables(conn) -> set[str]:
 
 def test_fresh_db_migrates_to_latest(tmp_path):
     conn = connect(tmp_path / "c.db")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
     assert _tables(conn) == TABLES
 
 
@@ -39,13 +40,13 @@ def test_issue_survives_game_row_deletion(tmp_path):
             "INSERT INTO games (set_name, family, is_bios, path, synced_at) "
             "VALUES ('x', 'x', 0, 'x.zip', 'now')"
         )
-    log_issue(conn, "x", "sabrina", "froze on stage 2")
+    log_issue(conn, DEFAULT_EMULATOR, "x", "sabrina", "froze on stage 2")
     with conn:
         conn.execute("DELETE FROM games WHERE set_name = 'x'")
-    assert [r["note"] for r in list_issues(conn, "x")] == ["froze on stage 2"]
+    assert [r["note"] for r in issues_for(conn, DEFAULT_EMULATOR, "x")] == ["froze on stage 2"]
 
 
 def test_timestamps_are_utc(tmp_path):
     conn = connect(tmp_path / "c.db")
-    log_issue(conn, "x", "sabrina", "n")
+    log_issue(conn, DEFAULT_EMULATOR, "x", "sabrina", "n")
     assert list_issues(conn)[0]["at"].endswith("+00:00")

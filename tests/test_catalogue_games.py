@@ -5,7 +5,7 @@ from conftest import chips_for, make_zip
 
 from infiltrator.catalogue import connect
 from infiltrator.catalogue.games import sync_games
-from infiltrator.catalogue.issues import list_issues, log_issue
+from infiltrator.catalogue.issues import issues_for, log_issue
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, load_dat
 from infiltrator.metadata import SetMeta
@@ -45,11 +45,11 @@ def test_removed_file_removes_game_row_but_keeps_issue(lib):
     library, dat, conn = lib
     make_zip(library / "alpha.zip", chips_for("alpha"))
     sync_games(conn, library, dat, {})
-    log_issue(conn, "alpha", "sabrina", "crashed")
+    log_issue(conn, DEFAULT_EMULATOR, "alpha", "sabrina", "crashed")
     (library / "alpha.zip").unlink()
     assert sync_games(conn, library, dat, {}) == 0
     assert row(conn, "alpha") is None
-    assert len(list_issues(conn, "alpha")) == 1
+    assert len(issues_for(conn, DEFAULT_EMULATOR, "alpha")) == 1
 
 
 def test_a11y_flags_from_dat_input(lib):

@@ -129,7 +129,9 @@ def _top_up(settings: Settings, conn: sqlite3.Connection, who: Persona) -> None:
     if since is None:
         fill_shelf(conn, who, settings.shelf_size)
     else:
-        fill_demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since))
+        fill_demo_shelf(
+            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
+        )
 
 
 def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: bool) -> None:
@@ -287,7 +289,9 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
         _library_ready(settings)
         dat = _mame_dat(settings)
         preflight(settings)
-        if not demo_shelf(conn, who, settings.shelf_size, arrived_since(conn, since)):
+        if not demo_shelf(
+            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
+        ):
             typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
             return
         set_tv_persona(conn, persona)
@@ -348,9 +352,15 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
 
+def _mame_titles(conn: sqlite3.Connection) -> dict[str, str]:
+    """Set name → title, for the MAME 2003-Plus sets: the only ones a shelf holds so far."""
+    rows = conn.execute("SELECT set_name, title FROM games WHERE emulator = ?", (DEFAULT_EMULATOR,))
+    return {r["set_name"]: r["title"] for r in rows}
+
+
 def _echo_moves(conn: sqlite3.Connection, out: list[str], incoming: list[str]) -> None:
     """One line per game that left or arrived, by title."""
-    titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
+    titles = _mame_titles(conn)
     for name in out:
         typer.echo(f"Out: {titles.get(name, name)}")
     for name in incoming:
@@ -382,10 +392,12 @@ def shelf_add(persona: str, title: str) -> None:
 
 
 def _set_for_title(conn: sqlite3.Connection, game_title: str) -> str | None:
+    """The MAME 2003-Plus set a person means by this title: shelved, then parent, then name."""
     rows = conn.execute(
-        "SELECT g.set_name, g.parent, EXISTS(SELECT 1 FROM shelf s WHERE s.set_name = g.set_name) "
-        "AS shelved FROM games g WHERE g.title = ? COLLATE NOCASE",
-        (game_title,),
+        "SELECT g.set_name, g.parent, EXISTS(SELECT 1 FROM shelf s "
+        "WHERE s.emulator = g.emulator AND s.set_name = g.set_name) AS shelved "
+        "FROM games g WHERE g.emulator = ? AND g.title = ? COLLATE NOCASE",
+        (DEFAULT_EMULATOR, game_title),
     ).fetchall()
     if not rows:
         return None
@@ -404,16 +416,17 @@ def issue_log(
     if set_name is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
-    log_issue(conn, set_name, device, note)
+    log_issue(conn, DEFAULT_EMULATOR, set_name, device, note)
     typer.echo("Noted.")
 
 
 @issue_app.command("list")
 def issue_list(verbose: Verbose = False) -> None:
     conn = _db(_settings())
-    titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
+    rows = conn.execute("SELECT emulator, set_name, title FROM games")
+    titles = {(r["emulator"], r["set_name"]): r["title"] for r in rows}
     for row in list_issues(conn):
-        name = titles.get(row["set_name"], row["set_name"])
+        name = titles.get((row["emulator"], row["set_name"]), row["set_name"])
         extra = f" [{row['set_name']}]" if verbose else ""
         typer.echo(f"{row['at'][:10]}  {name}{extra} on {row['device']}: {row['note']}")
 
@@ -430,5 +443,5 @@ def tune_set(
     if set_name is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
-    set_tuning(conn, set_name, device, settings)
+    set_tuning(conn, DEFAULT_EMULATOR, set_name, device, settings)
     typer.echo("Saved.")

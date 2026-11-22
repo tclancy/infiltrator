@@ -66,5 +66,5 @@ def sync_games(conn: sqlite3.Connection, library: Path, dat: Dat, meta: dict[str
     with conn:
         conn.execute("DELETE FROM games")
         conn.executemany(f"INSERT INTO games ({COLUMNS}) VALUES ({placeholders})", rows)
-        record_arrivals(conn, {g.name: library / f"{g.name}.zip" for g in games})
+        record_arrivals(conn, dat.emulator, {g.name: library / f"{g.name}.zip" for g in games})
     return len(rows)

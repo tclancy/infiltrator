@@ -19,10 +19,11 @@ def _migrations() -> list[tuple[int, str]]:
     return sorted(found)
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
+def _migrate(conn: sqlite3.Connection, up_to: int | None = None) -> None:
+    """Apply every migration newer than the database, or only those up to `up_to`."""
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     for version, sql in _migrations():
-        if version <= current:
+        if version <= current or (up_to is not None and version > up_to):
             continue
         with conn:
             conn.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;")

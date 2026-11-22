@@ -129,7 +129,7 @@ def test_tune_set_by_title(home):
     from infiltrator.catalogue.tuning import tuned_sets
     from infiltrator.config import load_settings
 
-    assert tuned_sets(connect(load_settings().db_path)) == {"alpha"}
+    assert tuned_sets(connect(load_settings().db_path), DEFAULT_EMULATOR) == {"alpha"}
 
 
 @pytest.fixture
@@ -615,3 +615,24 @@ def test_a_set_in_both_layouts_stops_the_sieve_before_it_touches_anything(home):
     assert "alpha.zip" in result.output  # --verbose says which
     assert (home / "delta.zip").exists()
     assert not (home.parent / "library" / DEFAULT_EMULATOR / "delta.zip").exists()
+
+
+def test_a_game_named_by_title_is_its_mame_2003_plus_set(home):
+    make_zip(home / "alpha.zip", chips_for("alpha"))
+    run("sieve")
+    from test_personas import add_game
+
+    from infiltrator.catalogue import connect
+    from infiltrator.catalogue.issues import list_issues
+    from infiltrator.catalogue.tuning import tuned_sets
+    from infiltrator.config import load_settings
+
+    conn = connect(load_settings().db_path)
+    add_game(conn, "fbonly", emulator="fbneo", title="Only On FBNeo")
+    assert run("issue", "log", "Only On FBNeo", "--device", "s", "--note", "n").exit_code == 1
+    assert run("tune", "set", "Only On FBNeo", "--device", "s", "--settings", "x").exit_code == 1
+    assert run("issue", "log", "Alpha Blaster", "--device", "s", "--note", "n").exit_code == 0
+    assert [(r["emulator"], r["set_name"]) for r in list_issues(conn)] == [
+        (DEFAULT_EMULATOR, "alpha")
+    ]
+    assert tuned_sets(conn, "fbneo") == set()

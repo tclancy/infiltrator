@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from infiltrator.catalogue.tuning import tuned_sets
+from infiltrator.dat import DEFAULT_EMULATOR
 
 GAMEPAD = frozenset({"joy4way", "joy8way", "doublejoy4way", "doublejoy8way", "stick"})
 SPINNERS = frozenset({"dial", "trackball", "paddle"})
@@ -94,8 +95,12 @@ def _dropped_families(conn: sqlite3.Connection, persona: str) -> set[str]:
 
 
 def eligible(conn: sqlite3.Connection, p: Persona, ignore_drops: bool = False) -> list[sqlite3.Row]:
-    games = conn.execute("SELECT * FROM games WHERE is_bios = 0 ORDER BY set_name").fetchall()
-    tuned = tuned_sets(conn)
+    # Only MAME 2003-Plus sets reach a shelf until choosing an emulator per game lands.
+    games = conn.execute(
+        "SELECT * FROM games WHERE is_bios = 0 AND emulator = ? ORDER BY set_name",
+        (DEFAULT_EMULATOR,),
+    ).fetchall()
+    tuned = tuned_sets(conn, DEFAULT_EMULATOR)
     dropped = set() if ignore_drops else _dropped_families(conn, p.name)
     return [
         g
