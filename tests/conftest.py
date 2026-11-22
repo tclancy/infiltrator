@@ -151,8 +151,67 @@ def make_zip(path: Path, members: dict[str, bytes]) -> Path:
     return path
 
 
+def _rom_xml_fbneo(name: str, label: str | None, extra: dict) -> str:
+    """Generate ROM XML for FBNeo DAT (no sha1 attribute)."""
+    attrs = {"name": name}
+    extra = dict(extra)
+    extra.pop("nosha1", None)  # Ignore for FBNeo (never has sha1)
+    extra.pop("bios", None)  # FBNeo doesn't use bios attribute on roms
+    if label is None:
+        attrs["size"] = "1024"
+    else:
+        data = label_bytes(label)
+        attrs["size"] = str(len(data))
+        attrs["crc"] = f"{zlib.crc32(data):08x}"
+        # No sha1 for FBNeo
+    attrs.update(extra)
+    body = " ".join(f"{k}={quoteattr(v)}" for k, v in attrs.items())
+    return f"<rom {body}/>"
+
+
+def fbneo_dat_xml() -> str:
+    """Generate a FBNeo-format DAT with isbios attribute."""
+    parts = [
+        '<?xml version="1.0"?>',
+        '<!DOCTYPE datafile PUBLIC "-//FinalBurn Neo//DTD ROM Management Datafile//EN"'
+        ' "http://www.logiqx.com/Dats/datafile.dtd">',
+        "<datafile>",
+        "<header>",
+        "<name>Test FBNeo</name>",
+        "<description>Test FBNeo DAT</description>",
+        "<version>1.0</version>",
+        "</header>",
+    ]
+    for name, attrs, roms, _extra in GAMES:
+        game_attrs = {"name": name}
+        # Map MAME attributes to FBNeo
+        if "runnable" in attrs and attrs["runnable"] == "no":
+            game_attrs["isbios"] = "yes"
+        for key in ("cloneof", "romof"):
+            if key in attrs:
+                game_attrs[key] = attrs[key]
+        head = " ".join(f"{k}={quoteattr(v)}" for k, v in game_attrs.items())
+        parts.append(f"<game {head}>")
+        parts.append(f"<description>{attrs['description']}</description>")
+        parts.append("<year>1982</year><manufacturer>Test</manufacturer>")
+        parts.extend(_rom_xml_fbneo(*r) for r in roms)
+        # Add comment for BIOS sets (FBNeo-specific)
+        if "runnable" in attrs and attrs["runnable"] == "no":
+            parts.append("<comment>BIOS only</comment>")
+        parts.append("</game>")
+    parts.append("</datafile>")
+    return "\n".join(parts)
+
+
 @pytest.fixture
 def synthetic_dat(tmp_path) -> Path:
     path = tmp_path / "dat.xml"
     path.write_text(dat_xml())
+    return path
+
+
+@pytest.fixture
+def synthetic_fbneo_dat(tmp_path) -> Path:
+    path = tmp_path / "fbneo.xml"
+    path.write_text(fbneo_dat_xml())
     return path

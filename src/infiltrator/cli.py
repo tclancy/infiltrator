@@ -29,9 +29,11 @@ from infiltrator.personas import (
 )
 from infiltrator.safety import DropFolderBusy
 from infiltrator.shelf import (
+    add,
     build_shelf,
     current_shelf,
     demo_shelf,
+    drop,
     fill_demo_shelf,
     fill_shelf,
     rotate,
@@ -322,11 +324,40 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
         out, incoming = rotate(conn, who, settings.shelf_size, count)
     if not incoming:
         typer.echo("Nothing new to rotate in.")
+    _echo_moves(conn, out, incoming)
+    _tell_romm_or_shrug(settings, conn, verbose=False)
+
+
+def _echo_moves(conn: sqlite3.Connection, out: list[str], incoming: list[str]) -> None:
+    """One line per game that left or arrived, by title."""
     titles = {r["set_name"]: r["title"] for r in conn.execute("SELECT set_name, title FROM games")}
     for name in out:
         typer.echo(f"Out: {titles.get(name, name)}")
     for name in incoming:
         typer.echo(f"In: {titles.get(name, name)}")
+
+
+@shelf_app.command("drop")
+def shelf_drop(persona: str, title: str) -> None:
+    """Take a game off the shelf and keep it off until you add it back."""
+    settings = _settings()
+    conn = _db(settings)
+    who = _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        dropped = drop(conn, who, title)
+    typer.echo(f"Out: {dropped}")
+    _tell_romm_or_shrug(settings, conn, verbose=False)
+
+
+@shelf_app.command("add")
+def shelf_add(persona: str, title: str) -> None:
+    """Put a game on the shelf. On a full shelf, the longest-shelved game makes room."""
+    settings = _settings()
+    conn = _db(settings)
+    who = _persona(conn, persona)
+    with _changing_shelf(settings, conn, persona):
+        out, incoming = add(conn, who, title, settings.shelf_size)
+    _echo_moves(conn, out, incoming)
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
 

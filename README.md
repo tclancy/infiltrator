@@ -61,6 +61,8 @@ infiltrator persona add tom       # a few questions about who's playing
 infiltrator shelf build tom       # pick the shelf
 infiltrator shelf show tom
 infiltrator shelf rotate tom      # the sommelier: swap the longest-shelved game for a fresh one
+infiltrator shelf drop tom "Title"  # take a game off the shelf and keep it off until you add it back
+infiltrator shelf add tom "Title"   # put a game on the shelf; on a full shelf the longest-shelved makes room
 infiltrator play tom              # put tom's shelf on the TV (swap to `play party` for a party)
 infiltrator play tom --new        # demo the last 24 hours' arrivals on the TV; `play tom` puts the usual shelf back
 infiltrator play tom --new --days 3   # ...or the last 3 days'
