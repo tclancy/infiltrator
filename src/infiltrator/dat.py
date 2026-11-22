@@ -1,8 +1,13 @@
-"""The MAME 2003-Plus DAT: which games exist and exactly which chips each one needs."""
+"""An emulator's DAT: which games exist and exactly which chips each one needs.
+
+Two dialects are read: MAME 2003-Plus's and FBNeo's. They differ in how a set says it is a BIOS,
+and FBNeo's cannot say a ROM is optional, so that list is passed in (see `load_optional_roms`).
+"""
 
 import json
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,11 +48,8 @@ class Game:
     default_bios: str | None
 
 
-@dataclass(frozen=True)
-class _Dialect:
-    """Parsing differences between emulator DATs."""
-
-    is_bios_marker: str
+OptionalRoms = Mapping[str, frozenset[str]]
+"""Set name → CRCs (lowercase, 8 hex digits) of the ROMs that set can load without."""
 
 
 def _mame2003_plus_is_bios(el: ET.Element) -> bool:
@@ -56,6 +58,19 @@ def _mame2003_plus_is_bios(el: ET.Element) -> bool:
 
 def _fbneo_is_bios(el: ET.Element) -> bool:
     return el.get("isbios") == "yes"
+
+
+IS_BIOS: dict[str, Callable[[ET.Element], bool]] = {
+    "mame2003-plus": _mame2003_plus_is_bios,
+    "fbneo": _fbneo_is_bios,
+}
+"""How each emulator's DAT marks a BIOS set. Its keys are the emulators Infiltrator knows."""
+
+
+def _known(emulator: str) -> str:
+    if emulator not in IS_BIOS:
+        raise ValueError(f"Unknown emulator: {emulator!r}. Known emulators: {', '.join(IS_BIOS)}")
+    return emulator
 
 
 def _rom(el: ET.Element, optional: bool = False) -> Rom:
@@ -75,32 +90,31 @@ def _rom(el: ET.Element, optional: bool = False) -> Rom:
     )
 
 
+def _is_optional(el: ET.Element, optional: frozenset[str]) -> bool:
+    return (el.get("crc") or "").lower() in optional
+
+
 def _game(
     el: ET.Element,
-    is_bios_func: callable = _mame2003_plus_is_bios,
-    optional_roms: dict[str, frozenset[str]] | None = None,
+    is_bios: Callable[[ET.Element], bool] = _mame2003_plus_is_bios,
+    optional_roms: OptionalRoms | None = None,
 ) -> Game:
     inp = el.find("input")
     default_bios = next(
         (b.get("name") for b in el.findall("biosset") if b.get("default") == "yes"), None
     )
     players = inp.get("players") if inp is not None else None
-    game_name = el.get("name")
-    optional_set = optional_roms.get(game_name, frozenset()) if optional_roms else frozenset()
-    roms = []
-    for r in el.findall("rom"):
-        rom_crc = r.get("crc")
-        is_optional = (rom_crc and rom_crc.lower() in optional_set) if rom_crc else False
-        roms.append(_rom(r, optional=is_optional))
+    name = el.get("name")
+    optional = (optional_roms or {}).get(name, frozenset())
     return Game(
-        name=game_name,
+        name=name,
         description=el.findtext("description", ""),
         year=el.findtext("year"),
         manufacturer=el.findtext("manufacturer"),
         cloneof=el.get("cloneof"),
         romof=el.get("romof"),
-        is_bios=is_bios_func(el),
-        roms=tuple(roms),
+        is_bios=is_bios(el),
+        roms=tuple(_rom(r, optional=_is_optional(r, optional)) for r in el.findall("rom")),
         has_disk=el.find("disk") is not None,
         players=int(players) if players else None,
         control=inp.get("control") if inp is not None else None,
@@ -110,19 +124,9 @@ def _game(
 
 
 class Dat:
-    def __init__(
-        self,
-        games: dict[str, Game],
-        emulator: str = "mame2003-plus",
-        optional_roms: dict[str, frozenset[str]] | None = None,
-    ):
-        if emulator not in {"mame2003-plus", "fbneo"}:
-            raise ValueError(
-                f'Unknown emulator: {emulator!r}. Known emulators: "mame2003-plus", "fbneo"'
-            )
-        self.emulator = emulator
+    def __init__(self, games: dict[str, Game], emulator: str = "mame2003-plus"):
+        self.emulator = _known(emulator)
         self.games = games
-        self.optional_roms = optional_roms or {}
         self._index: dict[ChipKey, list[tuple[Game, Rom]]] = defaultdict(list)
         for game in games.values():
             for rom in game.roms:
@@ -183,56 +187,40 @@ class Dat:
         return current.name
 
 
-def load_optional_roms(path: Path) -> dict[str, frozenset[str]]:
-    """Load optional ROMs mapping from a JSON file.
+def _crc(value: object, set_name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 8
+        or set(value.lower()) - set("0123456789abcdef")
+    ):
+        raise ValueError(f"CRC for {set_name!r} must be 8-hex string, got {value!r}")
+    return value.lower()
 
-    File format: {"setname": ["crc1", "crc2", ...], ...}
-    CRCs are 8-hex-digit strings (case-insensitive; normalized to lowercase).
+
+def load_optional_roms(path: Path) -> dict[str, frozenset[str]]:
+    """The ROMs each set can load without, as `scripts/fbneo_optional.py` writes them.
+
+    A JSON object: set name → list of CRCs, 8 hex digits each (lowercased on the way in).
     """
-    with open(path) as f:
-        data = json.load(f)
+    data = json.loads(Path(path).read_text())
     if not isinstance(data, dict):
         raise ValueError("Optional ROMs file must be a JSON object")
-    result = {}
-    for set_name, crc_list in data.items():
-        if not isinstance(set_name, str):
-            raise ValueError(f"Optional ROMs keys must be strings, got {type(set_name).__name__}")
-        if not isinstance(crc_list, list):
-            msg = (
-                f"Optional ROMs values must be lists, got "
-                f"{type(crc_list).__name__} for {set_name!r}"
+    for set_name, crcs in data.items():
+        if not isinstance(crcs, list):
+            raise ValueError(
+                f"Optional ROMs values must be lists, got {type(crcs).__name__} for {set_name!r}"
             )
-            raise ValueError(msg)
-        normalized_crcs = []
-        for crc in crc_list:
-            if (
-                not isinstance(crc, str)
-                or len(crc) != 8
-                or not all(c in "0123456789abcdefABCDEF" for c in crc)
-            ):
-                raise ValueError(f"CRC for {set_name!r} must be 8-hex string, got {crc!r}")
-            normalized_crcs.append(crc.lower())
-        result[set_name] = frozenset(normalized_crcs)
-    return result
+    return {name: frozenset(_crc(c, name) for c in crcs) for name, crcs in data.items()}
 
 
 def load_dat(
-    path: Path,
-    emulator: str = "mame2003-plus",
-    optional_roms: dict[str, frozenset[str]] | None = None,
+    path: Path, emulator: str = "mame2003-plus", optional_roms: OptionalRoms | None = None
 ) -> Dat:
-    if emulator == "mame2003-plus":
-        is_bios_func = _mame2003_plus_is_bios
-    elif emulator == "fbneo":
-        is_bios_func = _fbneo_is_bios
-    else:
-        raise ValueError(
-            f"Unknown emulator: {emulator!r}. Known emulators: 'mame2003-plus', 'fbneo'"
-        )
+    is_bios = IS_BIOS[_known(emulator)]
     games = {}
     for _event, el in ET.iterparse(path, events=("end",)):
         if el.tag == "game":
-            game = _game(el, is_bios_func=is_bios_func, optional_roms=optional_roms)
+            game = _game(el, is_bios=is_bios, optional_roms=optional_roms)
             games[game.name] = game
             el.clear()
-    return Dat(games, emulator=emulator, optional_roms=optional_roms)
+    return Dat(games, emulator=emulator)
