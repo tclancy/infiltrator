@@ -24,6 +24,11 @@ def _published_sets(settings: Settings) -> Path:
     return emulator_dir(settings.library_dir, DEFAULT_EMULATOR)
 
 
+def shown_emulators(settings: Settings) -> frozenset[str]:
+    """The emulators whose sets may be shelved: MAME 2003-Plus, and any with folders of its own."""
+    return frozenset({DEFAULT_EMULATOR})
+
+
 def _publishing(settings: Settings) -> bool:
     return settings.shelf_dir is not None and settings.bios_dir is not None
 

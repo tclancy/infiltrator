@@ -20,7 +20,7 @@ from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, IS_BIOS, Dat
 from infiltrator.dats import Wanted, load_dats, wanted_for
 from infiltrator.library import move_flat_library
 from infiltrator.metadata import load_metadata
-from infiltrator.names import title
+from infiltrator.names import set_label, title
 from infiltrator.personas import (
     GAMEPAD,
     LIGHT_GUN,
@@ -40,9 +40,10 @@ from infiltrator.shelf import (
     fill_demo_shelf,
     fill_shelf,
     rotate,
+    settle_emulators,
 )
 from infiltrator.sieve import SieveReport, rebuild_library, run_sieve
-from infiltrator.tv import preflight, publish_tv, tell_romm
+from infiltrator.tv import preflight, publish_tv, shown_emulators, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
 persona_app = typer.Typer(help="Who's playing.", no_args_is_help=True)
@@ -131,14 +132,18 @@ def _sync_tv(settings: Settings, dat: Dat, conn: sqlite3.Connection) -> None:
 
 
 def _top_up(settings: Settings, conn: sqlite3.Connection, who: Persona) -> None:
-    """Fill the TV shelf's empty slots; during a demo, only with games new since it began."""
+    """Settle the TV shelf's emulators, then fill its empty slots.
+
+    During a demo, only games new since it began may fill a slot.
+    """
+    shown = shown_emulators(settings)
+    settle_emulators(conn, who, shown)
     since = demo_since(conn)
     if since is None:
-        fill_shelf(conn, who, settings.shelf_size)
+        fill_shelf(conn, who, settings.shelf_size, emulators=shown)
     else:
-        fill_demo_shelf(
-            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
-        )
+        arrived = arrived_since(conn, DEFAULT_EMULATOR, since)
+        fill_demo_shelf(conn, who, settings.shelf_size, arrived, emulators=shown)
 
 
 def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: bool) -> None:
@@ -151,11 +156,6 @@ def _tell_romm_or_shrug(settings: Settings, conn: sqlite3.Connection, verbose: b
             typer.echo(f"  ({type(err).__name__}: {err})")
 
 
-def _label(emulator: str, set_name: str) -> str:
-    """A set as the nerd output names it: bare for MAME 2003-Plus, as it always was."""
-    return set_name if emulator == DEFAULT_EMULATOR else f"{emulator}/{set_name}"
-
-
 def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     """One line per game, not per version: two Heavy Barrels are one new game."""
     by_family: dict[str, list[str]] = {}
@@ -165,7 +165,7 @@ def _new_titles(dat: Dat, set_names: list[str]) -> dict[str, list[str]]:
     for family, names in by_family.items():
         root = dat.games.get(family) or dat.games[names[0]]
         titles.setdefault(title(root.description), []).extend(
-            _label(dat.emulator, n) for n in names
+            set_label(dat.emulator, n) for n in names
         )
     return titles
 
@@ -202,11 +202,11 @@ def _echo_sieve_details(report: SieveReport) -> None:
         typer.echo(f"  held for {', '.join(emulators)}: {path} has chips no library set holds")
     for emulator, names in report.new_bios.items():
         for name in names:
-            typer.echo(f"  bios {_label(emulator, name)}")
+            typer.echo(f"  bios {set_label(emulator, name)}")
     for emulator, names in report.blocked.items():
         for name in names:
             typer.echo(
-                f"  not overwritten: {_label(emulator, name)}.zip is in the library "
+                f"  not overwritten: {set_label(emulator, name)}.zip is in the library "
                 "but isn't this set"
             )
 
@@ -310,7 +310,9 @@ def play(persona: str, new: New = False, days: Days = None, verbose: Verbose = F
         dat = _mame_dat(settings)
         preflight(settings)
         set_tv_persona(conn, persona)
-        fill_shelf(conn, who, settings.shelf_size)
+        shown = shown_emulators(settings)
+        settle_emulators(conn, who, shown)
+        fill_shelf(conn, who, settings.shelf_size, emulators=shown)
         publish_tv(settings, dat, conn)
     _tell_romm_or_shrug(settings, conn, verbose)
     shelf_show(persona)
@@ -330,9 +332,9 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
         _library_ready(settings)
         dat = _mame_dat(settings)
         preflight(settings)
-        if not demo_shelf(
-            conn, who, settings.shelf_size, arrived_since(conn, DEFAULT_EMULATOR, since)
-        ):
+        arrived = arrived_since(conn, DEFAULT_EMULATOR, since)
+        shown = shown_emulators(settings)
+        if not demo_shelf(conn, who, settings.shelf_size, arrived, emulators=shown):
             typer.echo(f"Nothing new for {persona} in {_window_words(days)}.")
             return
         set_tv_persona(conn, persona)
@@ -343,15 +345,23 @@ def _play_new(persona: str, days: int, verbose: bool) -> None:
 
 
 @contextmanager
-def _changing_shelf(settings: Settings, conn: sqlite3.Connection, persona: str) -> Iterator[None]:
-    """Around a shelf change: refuse before it if the TV can't follow, publish after it."""
-    on_tv = tv_persona(conn) == persona
+def _changing_shelf(
+    settings: Settings, conn: sqlite3.Connection, who: Persona
+) -> Iterator[frozenset[str]]:
+    """Around a shelf change: refuse before it if the TV can't follow, publish after it.
+
+    Before the change, each shelved game is put on the emulator chosen for it. Yields the
+    emulators the TV can show, for the change to place games with.
+    """
+    on_tv = tv_persona(conn) == who.name
     with _or_try_again_later(verbose=False):
         _library_ready(settings)
         dat = _mame_dat(settings) if on_tv else None
         if on_tv:
             preflight(settings)
-        yield
+        shown = shown_emulators(settings)
+        settle_emulators(conn, who, shown)
+        yield shown
         if on_tv:
             end_demo(conn)
             publish_tv(settings, dat, conn)
@@ -373,8 +383,8 @@ def shelf_build(persona: str) -> None:
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    with _changing_shelf(settings, conn, persona):
-        build_shelf(conn, who, settings.shelf_size)
+    with _changing_shelf(settings, conn, who) as shown:
+        build_shelf(conn, who, settings.shelf_size, emulators=shown)
     _tell_romm_or_shrug(settings, conn, verbose=False)
     shelf_show(persona)
 
@@ -385,23 +395,23 @@ def shelf_rotate(persona: str, count: Annotated[int, typer.Option(min=1)] = 1) -
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    with _changing_shelf(settings, conn, persona):
-        out, incoming = rotate(conn, who, settings.shelf_size, count)
+    with _changing_shelf(settings, conn, who) as shown:
+        out, incoming = rotate(conn, who, settings.shelf_size, count, emulators=shown)
     if not incoming:
         typer.echo("Nothing new to rotate in.")
     _echo_moves(conn, out, incoming)
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
 
-def _mame_titles(conn: sqlite3.Connection) -> dict[str, str]:
-    """Set name → title, for the MAME 2003-Plus sets: the only ones a shelf holds so far."""
-    rows = conn.execute("SELECT set_name, title FROM games WHERE emulator = ?", (DEFAULT_EMULATOR,))
-    return {r["set_name"]: r["title"] for r in rows}
+def _titles(conn: sqlite3.Connection) -> dict[str, str]:
+    """Set → title, every emulator's, keyed as `set_label` names a set."""
+    rows = conn.execute("SELECT emulator, set_name, title FROM games")
+    return {set_label(r["emulator"], r["set_name"]): r["title"] for r in rows}
 
 
 def _echo_moves(conn: sqlite3.Connection, out: list[str], incoming: list[str]) -> None:
     """One line per game that left or arrived, by title."""
-    titles = _mame_titles(conn)
+    titles = _titles(conn)
     for name in out:
         typer.echo(f"Out: {titles.get(name, name)}")
     for name in incoming:
@@ -414,8 +424,8 @@ def shelf_drop(persona: str, title: str) -> None:
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    with _changing_shelf(settings, conn, persona):
-        dropped = drop(conn, who, title)
+    with _changing_shelf(settings, conn, who) as shown:
+        dropped = drop(conn, who, title, emulators=shown)
     typer.echo(f"Out: {dropped}")
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
@@ -426,8 +436,8 @@ def shelf_add(persona: str, title: str) -> None:
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    with _changing_shelf(settings, conn, persona):
-        out, incoming = add(conn, who, title, settings.shelf_size)
+    with _changing_shelf(settings, conn, who) as shown:
+        out, incoming = add(conn, who, title, settings.shelf_size, emulators=shown)
     _echo_moves(conn, out, incoming)
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
