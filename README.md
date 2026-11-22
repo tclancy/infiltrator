@@ -25,7 +25,7 @@ Create `~/.config/infiltrator/config.toml`. Every key can also be set as an
 
 ```toml
 drop_dir = "~/infiltrator/drop"         # put downloads here; the only place anything is deleted
-library_dir = "~/infiltrator/library"   # verified games end up here, one zip per game
+library_dir = "~/infiltrator/library"   # verified games end up here, one zip per game per emulator
 db_path = "~/infiltrator/catalogue.db"
 dat_path = "~/mame2003-plus-libretro/metadata/mame2003-plus.xml"
 metadata_dir = "~/infiltrator/metadata"
@@ -36,6 +36,10 @@ shelf_dir = "/mnt/samsungusb/games/romm/library/roms/arcade"  # holds only the s
 bios_dir = "/mnt/samsungusb/games/romm/library/bios/arcade"
 romm_url = "http://localhost:7767"
 romm_token_file = "~/.config/infiltrator/romm-token"   # chmod 600
+
+# Optional: FBNeo's set list, so FBNeo sets can be kept beside the MAME 2003-Plus ones.
+fbneo_dat_path = "~/infiltrator/fbneo-arcade.dat"
+fbneo_optional_path = "~/infiltrator/fbneo-optional.json"   # needs fbneo_dat_path
 ```
 
 The RomM token is a secret, so it never goes in this file: it is read from
@@ -44,6 +48,23 @@ The RomM token is a secret, so it never goes in this file: it is read from
 
 - **`dat_path`** is the MAME 2003-Plus game list from the
   [core's repo](https://github.com/libretro/mame2003-plus-libretro).
+- **`fbneo_dat_path`** (optional) is FBNeo's arcade game list, `dats/FinalBurn Neo (ClrMame
+  Pro XML, Arcade only).dat` in [FBNeo's repo](https://github.com/libretro/FBNeo).
+  **`fbneo_optional_path`** is the list of ROMs FBNeo can run without, which its game list
+  cannot say; generate it from the same commit with `scripts/fbneo_optional.py`. Without it,
+  an FBNeo set missing only an optional ROM counts as incomplete.
+
+  With FBNeo configured, the sieve also keeps any chip only FBNeo knows: a drop file holding
+  one that no library zip has stays in the drop folder (`--verbose` says `held for fbneo`),
+  because the library holds only sets. No FBNeo set is built yet; choosing which is next.
+
+**The library** keeps one folder per emulator: `library/mame2003-plus/<set>.zip` and
+`library/fbneo/<set>.zip`. Both emulators use some of the same set names for different
+games (MAME 2003-Plus `hbarrel` is the US Heavy Barrel, FBNeo's is the World one), so a set
+is always an emulator and a name. A library from before this, with the zips at the top, is
+moved into `library/mame2003-plus/` by the first command that uses it. Each file keeps its
+inode, so hardlinks into RomM's folders stay good. If a name is in both places the command
+stops and changes nothing (`--verbose` names it): keep the right file, delete the other.
 - **`metadata_dir`** holds the files you download yourself. Infiltrator doesn't ship them:
   - from [progettoSNAPS](https://www.progettosnaps.net/support/): `catver.ini`,
     `languages.ini`, `bestgames.ini` and `renameSET.ini`;
