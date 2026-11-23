@@ -19,3 +19,17 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      # The whole suite, on every commit and every push: no `stages:`, so it is
+      # registered at both. It takes a few seconds. This repo has no CI, so
+      # these hooks are the only place the tests run before a change merges.
+      - id: pytest
+        name: pytest
+        # `--frozen` so a hook run cannot re-resolve and rewrite uv.lock.
+        entry: uv run --frozen pytest -q
+        language: system
+        pass_filenames: false
+        # Without this, a change that touches no file pre-commit hands to the
+        # hook (a push of only this YAML, say) would skip the suite.
+        always_run: true
