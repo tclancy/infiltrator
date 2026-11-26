@@ -36,8 +36,18 @@ def test_env_overrides_toml(tmp_path):
     assert s.shelf_size == 10
 
 
-@pytest.mark.parametrize("size", [5, 11])
-def test_shelf_size_outside_6_to_10_raises(tmp_path, size):
+@pytest.mark.parametrize("size", [6, 12])
+def test_shelf_size_at_either_end_of_6_to_12_loads(tmp_path, size):
+    cfg = _toml(
+        tmp_path,
+        'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'
+        f'dat_path = "/x.xml"\nmetadata_dir = "/m"\nshelf_size = {size}\n',
+    )
+    assert load_settings(env={}, config_file=cfg).shelf_size == size
+
+
+@pytest.mark.parametrize("size", [5, 13])
+def test_shelf_size_outside_6_to_12_raises(tmp_path, size):
     cfg = _toml(
         tmp_path,
         'drop_dir = "/d"\nlibrary_dir = "/l"\ndb_path = "/c.db"\n'

@@ -18,7 +18,7 @@ OPTIONAL_PATH_KEYS = (
 )
 FOLDER_PAIRS = (("shelf_dir", "bios_dir"), ("fbneo_shelf_dir", "fbneo_bios_dir"))
 TOKEN_ENV = "INFILTRATOR_ROMM_TOKEN"  # a secret: the environment or romm_token_file, never the TOML
-SHELF_MIN, SHELF_MAX = 6, 10
+SHELF_MIN, SHELF_MAX = 6, 12  # 10 until 2026-11-25: Tom wanted all 12 of his games on at once
 
 
 @dataclass(frozen=True)
