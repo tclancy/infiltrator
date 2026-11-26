@@ -8,6 +8,7 @@ from test_personas import add_game
 from test_romm import FakeRomm
 
 from infiltrator.catalogue import connect
+from infiltrator.catalogue.emulators import choose_emulator
 from infiltrator.catalogue.tv import romm_pending, set_tv_persona
 from infiltrator.config import Settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, load_dat
@@ -271,6 +272,33 @@ def test_with_a_collection_every_verified_set_is_published_bios_sets_to_the_bios
     assert contents(folders["bios-fbneo"]) == ["biosx.zip"]
     for emulator, bios in ((DEFAULT_EMULATOR, "bios-mame"), (FBNEO, "bios-fbneo")):
         assert same_file(folders[bios] / "biosx.zip", settings.library_dir / emulator / "biosx.zip")
+
+
+def test_with_a_collection_a_game_chosen_for_fbneo_is_published_without_its_mame_sets(library):
+    """Heavy Barrel on the TV, 2026-11-25: the FBNeo set and both MAME sets were all in RomM."""
+    settings, dats, conn, folders = library
+    for name in ("beta", "betaw"):
+        make_zip(settings.library_dir / DEFAULT_EMULATOR / f"{name}.zip", chips_for("beta"))
+        add_game(conn, name, family="beta")
+    publish_tv(collecting(settings), dats, conn)
+    assert contents(folders["roms-mame"]) == ["alpha.zip", "beta.zip", "betaw.zip", "delta.zip"]
+    choose_emulator(conn, "beta", FBNEO)
+    result = publish_tv(collecting(settings), dats, conn)
+    assert result.removed == ["beta", "betaw"]
+    assert contents(folders["roms-mame"]) == ["alpha.zip", "delta.zip"]
+    assert contents(folders["roms-fbneo"]) == ["betafb.zip", "fbonly.zip"]
+
+
+def test_with_a_collection_a_game_chosen_for_fbneo_keeps_its_mame_sets_until_fbneo_has_folders(
+    library,
+):
+    settings, dats, conn, folders = library
+    make_zip(settings.library_dir / DEFAULT_EMULATOR / "beta.zip", chips_for("beta"))
+    add_game(conn, "beta", family="beta")
+    choose_emulator(conn, "beta", FBNEO)
+    mame_only = dataclasses.replace(settings, fbneo_shelf_dir=None, fbneo_bios_dir=None)
+    publish_tv(collecting(mame_only), dats, conn)
+    assert contents(folders["roms-mame"]) == ["alpha.zip", "beta.zip", "delta.zip"]
 
 
 def test_without_a_collection_only_the_shelf_is_published_as_before(library):

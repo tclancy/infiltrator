@@ -1,7 +1,7 @@
 """The shelf: a few games per persona, best first, and the sommelier that rotates them.
 
 Choosing works on MAME 2003-Plus rows: a game is a MAME family. Only when a choice is written
-to the shelf is each chosen game put on the emulator picked for it (see `_stand_ins`), so the
+to the shelf is each chosen game put on the emulator picked for it (see `stand_ins`), so the
 shelf holds one entry per game whichever emulator runs it. `emulators` says which emulators the
 TV can show; MAME 2003-Plus always, the others only once their folders are configured.
 """
@@ -99,7 +99,7 @@ def current_shelf(conn: sqlite3.Connection, persona: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def _stand_ins(conn: sqlite3.Connection, emulators: Collection[str]) -> dict[str, Key]:
+def stand_ins(conn: sqlite3.Connection, emulators: Collection[str]) -> dict[str, Key]:
     """Family → the set to shelve in place of its MAME 2003-Plus one, for each game that has one.
 
     A game gets one when someone chose another emulator for it, that emulator's set for it is
@@ -124,7 +124,7 @@ def _stand_ins(conn: sqlite3.Connection, emulators: Collection[str]) -> dict[str
 
 def _placed(conn: sqlite3.Connection, chosen: list[sqlite3.Row], emulators) -> list[Key]:
     """Where each chosen MAME row goes on the shelf: its game's stand-in, or itself."""
-    swaps = _stand_ins(conn, emulators)
+    swaps = stand_ins(conn, emulators)
     return [swaps.get(g["family"], key(g)) for g in chosen]
 
 
@@ -428,7 +428,7 @@ def settle_emulators(
     or the TV can no longer show it. A game keeps when it was placed, so a switch does not send
     it to the back of the rotation queue.
     """
-    swaps = _stand_ins(conn, emulators)
+    swaps = stand_ins(conn, emulators)
     cache: dict[str, dict[str, Key]] = {}
 
     def mame() -> dict[str, Key]:

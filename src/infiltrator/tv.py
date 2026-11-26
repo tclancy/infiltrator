@@ -1,12 +1,13 @@
 """Put the TV persona's shelf in RomM's folders and tell RomM about it.
 
 Without `romm_collection`, RomM's folders hold the shelf and nothing else. With it, they hold
-the whole verified library and the shelf is that RomM collection.
+the whole verified library (each game as its chosen emulator's sets) and the shelf is that RomM
+collection.
 """
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 from infiltrator.catalogue.games import library_sets
@@ -22,7 +23,7 @@ from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, Dat
 from infiltrator.library import emulator_dir
 from infiltrator.publish import PublishResult, Target, check_folders, locked, publish_all
 from infiltrator.romm import RommClient, RommError
-from infiltrator.shelf import current_shelf
+from infiltrator.shelf import current_shelf, stand_ins
 
 
 def bios_needed(dat: Dat, sets: list[str]) -> list[str]:
@@ -73,12 +74,23 @@ def _shelf_targets(
     return [_target(settings, dats[e], pair, shelf) for e, pair in folders.items()]
 
 
+def _shown_games(emulator: str, games: list[sqlite3.Row], stood_in: Collection[str]) -> list[str]:
+    """An emulator's sets RomM should list: a MAME 2003-Plus set is left out once its game is
+    shown as another emulator's set, so RomM has one emulator's copy of a game, not both."""
+    if emulator != DEFAULT_EMULATOR:
+        return [g["set_name"] for g in games]
+    return [g["set_name"] for g in games if g["family"] not in stood_in]
+
+
 def _library_targets(settings: Settings, conn: sqlite3.Connection) -> list[Target]:
-    """Each emulator with folders: every verified set of it, its BIOS sets in the BIOS folder."""
+    """Each emulator with folders: its verified sets, one emulator per game, and its BIOS sets
+    in the BIOS folder."""
+    stood_in = stand_ins(conn, shown_emulators(settings))
     targets = []
     for emulator, folders in publish_folders(settings).items():
         games, bios = library_sets(conn, emulator)
-        targets.append(Target(emulator_dir(settings.library_dir, emulator), *folders, games, bios))
+        shown = _shown_games(emulator, games, stood_in)
+        targets.append(Target(emulator_dir(settings.library_dir, emulator), *folders, shown, bios))
     return targets
 
 
