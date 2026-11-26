@@ -29,7 +29,7 @@ library_dir = "~/infiltrator/library"   # verified games end up here, one zip pe
 db_path = "~/infiltrator/catalogue.db"
 dat_path = "~/mame2003-plus-libretro/metadata/mame2003-plus.xml"
 metadata_dir = "~/infiltrator/metadata"
-shelf_size = 8                          # 6 to 10
+shelf_size = 8                          # 6 to 12
 
 # Optional: put a shelf on a RomM server's TV list. These are MAME 2003-Plus's folders.
 shelf_dir = "/mnt/samsungusb/games/romm/library/roms/mame"  # the shelf, or the library
