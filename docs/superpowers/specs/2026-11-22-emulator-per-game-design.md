@@ -91,6 +91,24 @@ from `GET /api/roms` per platform, creates the collection once, and replaces its
 `PUT /api/collections/{id}`. RomM only flags a vanished file as missing and re-attaches it when it
 returns; it is the cleanup task Infiltrator runs today that deletes the record and its cover.
 
+## Part 4: a game the library holds for FBNeo only (added 2026-11-25, Tom: yes)
+
+Found on the TV: a `pbobble2.zip` that is FBNeo's Puzzle Bobble 2 whole and four ROMs short of MAME
+2003-Plus's (a later revision). It was held in the drop folder and could not be chosen: `tune set`
+and the shelf both knew a game only through a MAME set in the library. A game is still a MAME
+family; this part lets one be chosen when the library has no MAME set of it.
+
+| # | Requirement | Check |
+|---|---|---|
+| 27 | A game can be chosen for FBNeo by its title when the library holds no MAME 2003-Plus set of it. | Test: FBNeo's set of a game in the drop folder, no MAME set → `tune set "<title>" … --emulator fbneo` says `Saved.` and records the choice; without `--emulator` it is `Couldn't find`. |
+| 28 | That game's FBNeo set is built from the drop folder, verified and published to RomM's `fbneo` folder by the same command. | Test: after the command the set is in `library/fbneo`, the drop zip is gone, and the set is in the TV's `fbneo` folder. |
+| 29 | That game goes on the shelf, and is dropped and added by title, under the persona's rules like any other. | Test: it fills an empty slot; `shelf drop` and `shelf add` act on it; with the game marked Japanese for an English persona it is built and not shelved, and `shelf add` says "Try again later!". |
+| 30 | A game whose BIOS is missing is refused, and the refusal names the BIOS. | Test: a game's FBNeo ROMs without its BIOS → `tune set` says it needs `<bios>.zip`, and `shelf add` says "Try again later!" and the same. |
+
+The title, language, controls and players of such a game come from MAME's DAT and the metadata
+files, since no MAME row exists to borrow them from. Still not done: a game only FBNeo's list
+has (no MAME family at all).
+
 ## Decisions (Tom, 2026-11-22: yes to all)
 
 1. **Folder names `mame` and `fbneo`, retiring `arcade`.** One-time cost: every game gets a new RomM

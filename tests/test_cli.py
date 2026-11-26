@@ -1065,3 +1065,105 @@ def test_shelved_sets_romm_does_not_list_are_named_and_the_collection_is_not_mad
     assert fake.collections == [] and pending()
     plain = run("play", "tom")
     assert "mame/alpha" not in plain.output
+
+
+# A game the library holds for FBNeo only: no MAME 2003-Plus set of it verifies, but the files
+# on hand are FBNeo's set of it whole (Puzzle Bobble 2 on the TV, 2026-11-25).
+
+
+@pytest.fixture
+def fbneo_only_tv(fbneo_home, tv, tmp_path, monkeypatch):
+    """The TV with FBNeo's folders; tom watching Delta; FBNeo's Alpha Blaster in the drop folder.
+
+    FBNeo's `alpha` is a1 and aw2. MAME's `alpha` needs a2, which nobody has, so the zip is held.
+    """
+    folders = tmp_path / "roms" / "fbneo", tmp_path / "bios" / "fbneo"
+    for folder in folders:
+        folder.mkdir(parents=True)
+    monkeypatch.setenv("INFILTRATOR_FBNEO_SHELF_DIR", str(folders[0]))
+    monkeypatch.setenv("INFILTRATOR_FBNEO_BIOS_DIR", str(folders[1]))
+    stock_drop(fbneo_home, "delta")
+    run("persona", "add", "tom", input="\n\n\n\n\n\n")
+    assert run("play", "tom").exit_code == 0
+    held = make_zip(fbneo_home / "world.zip", fbneo_chips_for("alpha"))
+    assert run("sieve").output == "Nothing new.\n" and held.exists()
+    return tv[0], folders[0], held
+
+
+def test_a_game_held_for_fbneo_only_cannot_be_named_without_choosing_fbneo(fbneo_only_tv):
+    result = tune("Alpha Blaster")
+    assert result.exit_code == 1 and result.output == "Couldn't find Alpha Blaster.\n"
+    assert choices() == [] and tunings() == []
+
+
+def test_a_game_held_for_fbneo_only_is_chosen_built_and_shown_by_name(fbneo_only_tv):
+    mame_tv, fbneo_folder, held = fbneo_only_tv
+    result = tune("alpha blaster", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert result.output == "Saved.\n"
+    assert choices() == [("alpha", "fbneo")]
+    assert fbneo_library(held.parent) == ["alpha.zip"]
+    assert not held.exists()  # its chips are in the library now
+    assert on_tv(fbneo_folder) == ["alpha"] and on_tv(mame_tv) == ["delta"]
+    assert run("shelf", "show", "tom").output.splitlines() == ["Alpha Blaster", "Delta"]
+
+
+def test_a_game_held_for_fbneo_only_is_dropped_and_added_by_its_title(fbneo_only_tv):
+    mame_tv, fbneo_folder, _held = fbneo_only_tv
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert run("shelf", "drop", "tom", "Alpha Blaster").output == "Out: Alpha Blaster\n"
+    assert on_tv(fbneo_folder) == [] and on_tv(mame_tv) == ["delta"]
+    assert run("sieve").exit_code == 0  # a dropped game is not brought back by the top-up
+    assert on_tv(fbneo_folder) == []
+    assert run("shelf", "add", "tom", "alpha blaster").output == "In: Alpha Blaster\n"
+    assert on_tv(fbneo_folder) == ["alpha"]
+
+
+def test_a_game_held_for_fbneo_only_still_follows_the_personas_language(fbneo_only_tv):
+    _mame_tv, fbneo_folder, held = fbneo_only_tv
+    meta = held.parent.parent / "meta" / "languages.ini"
+    meta.write_text("[English]\ndelta\n[Japanese]\nalpha\n")
+    assert tune("Alpha Blaster", "--emulator", "fbneo").exit_code == 0
+    assert fbneo_library(held.parent) == ["alpha.zip"]  # built and kept, as any verified set is
+    assert on_tv(fbneo_folder) == []
+    result = run("shelf", "add", "tom", "Alpha Blaster")
+    assert result.exit_code == 1 and result.output == "Try again later!\n"
+    assert run("shelf", "show", "tom").output.splitlines() == ["Delta"]
+
+
+def test_a_game_held_for_fbneo_only_borrows_its_controls_from_mames_list(fbneo_only_tv):
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    row = catalogue().execute("SELECT * FROM games WHERE emulator = 'fbneo'").fetchone()
+    assert (row["set_name"], row["family"], row["title"]) == ("alpha", "alpha", "Alpha Blaster")
+    assert (row["control"], row["language"], row["players"]) == ("joy4way", "English", "2P")
+
+
+def test_a_game_waiting_for_its_bios_says_which_one(fbneo_only_tv):
+    _mame_tv, fbneo_folder, held = fbneo_only_tv
+    from conftest import label_bytes
+
+    make_zip(held.parent / "beta-fb.zip", {"fb-b1.bin": label_bytes("b1")})
+    result = tune("Beta Force", "--emulator", "fbneo")
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == [
+        "Saved.",
+        "Not on fbneo yet: it needs a BIOS for fbneo: put biosx.zip in the drop folder.",
+    ]
+    result = run("shelf", "add", "tom", "Beta Force")
+    assert result.exit_code == 1
+    assert result.output.splitlines() == [
+        "Try again later!",
+        "Beta Force needs a BIOS for fbneo: put biosx.zip in the drop folder.",
+    ]
+    assert on_tv(fbneo_folder) == []
+
+
+def test_a_game_held_for_fbneo_only_leaves_the_shelf_when_the_tv_stops_showing_fbneo(
+    fbneo_only_tv, monkeypatch
+):
+    tune("Alpha Blaster", "--emulator", "fbneo")
+    assert run("shelf", "show", "tom").output.splitlines() == ["Alpha Blaster", "Delta"]
+    monkeypatch.delenv("INFILTRATOR_FBNEO_SHELF_DIR")
+    monkeypatch.delenv("INFILTRATOR_FBNEO_BIOS_DIR")
+    assert run("sieve").exit_code == 0
+    assert run("shelf", "show", "tom").output.splitlines() == ["Delta"]

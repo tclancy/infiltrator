@@ -104,6 +104,8 @@ infiltrator tune set "Heavy Barrel" --device sabrina --settings 'L1/R1 rotate (k
                                   # a tuned game counts as gamepad-playable
 infiltrator tune set "Heavy Barrel" --device sabrina --settings 'right stick aims' --emulator fbneo
                                   # ...and from now on it runs on FBNeo; `--emulator mame2003-plus` undoes it
+infiltrator tune set "Puzzle Bobble 2" --device sabrina --settings 'FBNeo revision' --emulator fbneo
+                                  # a game whose zip suits FBNeo only (the sieve holds it): this builds and shows it
 infiltrator rescan                # rebuild the game list from the library
 ```
 

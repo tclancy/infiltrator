@@ -1,7 +1,9 @@
 """The shelf: a few games per persona, best first, and the sommelier that rotates them.
 
-Choosing works on MAME 2003-Plus rows: a game is a MAME family. Only when a choice is written
-to the shelf is each chosen game put on the emulator picked for it (see `stand_ins`), so the
+Choosing works on MAME 2003-Plus rows: a game is a MAME family (a game the library holds for
+another emulator only is chosen as that emulator's row, see `personas.eligible`). Only when a
+choice is written to the shelf is each chosen game put on the emulator picked for it (see
+`stand_ins`), so the
 shelf holds one entry per game whichever emulator runs it. `emulators` says which emulators the
 TV can show; MAME 2003-Plus always, the others only once their folders are configured.
 """
@@ -392,7 +394,8 @@ def _raw_shelf(conn: sqlite3.Connection, persona: str) -> list[sqlite3.Row]:
 
 def _mame_versions(conn: sqlite3.Connection, p: Persona) -> dict[str, Key]:
     """Family → the MAME 2003-Plus set this persona would be given for it."""
-    return {g["family"]: key(g) for g in pick_one_per_family(eligible(conn, p), p)}
+    mame = [g for g in eligible(conn, p) if g["emulator"] == DEFAULT_EMULATOR]
+    return {g["family"]: key(g) for g in pick_one_per_family(mame, p)}
 
 
 def _settled(row: sqlite3.Row, swaps: dict[str, Key], mame: Callable[[], dict]) -> Key | None:
