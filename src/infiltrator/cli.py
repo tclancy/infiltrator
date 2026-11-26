@@ -18,7 +18,7 @@ from infiltrator.catalogue.tv import demo_since, end_demo, set_tv_persona, start
 from infiltrator.config import Settings, load_settings
 from infiltrator.dat import DEFAULT_EMULATOR, FBNEO, IS_BIOS, Dat
 from infiltrator.dats import Wanted, load_dats, wanted_for
-from infiltrator.library import move_flat_library
+from infiltrator.library import emulator_dir, move_flat_library
 from infiltrator.metadata import load_metadata
 from infiltrator.names import set_label, title
 from infiltrator.personas import (
@@ -30,6 +30,7 @@ from infiltrator.personas import (
     load_persona,
     save_persona,
 )
+from infiltrator.rebuild import bios_ready
 from infiltrator.safety import DropFolderBusy
 from infiltrator.shelf import (
     add,
@@ -43,6 +44,7 @@ from infiltrator.shelf import (
     settle_emulators,
 )
 from infiltrator.sieve import SieveReport, rebuild_library, run_sieve
+from infiltrator.standins import families_titled, standins
 from infiltrator.tv import preflight, publish_tv, shown_emulators, tell_romm
 
 app = typer.Typer(help="Slip into the stack, make it work, sneak back out.", no_args_is_help=True)
@@ -431,8 +433,12 @@ def shelf_add(persona: str, title: str) -> None:
     settings = _settings()
     conn = _db(settings)
     who = _persona(conn, persona)
-    with _changing_shelf(settings, conn, who) as shown:
-        out, incoming = add(conn, who, title, settings.shelf_size, emulators=shown)
+    try:
+        with _changing_shelf(settings, conn, who) as shown:
+            out, incoming = add(conn, who, title, settings.shelf_size, emulators=shown)
+    except typer.Exit:
+        _echo_awaited_bios(settings, conn, title)
+        raise
     _echo_moves(conn, out, incoming)
     _tell_romm_or_shrug(settings, conn, verbose=False)
 
@@ -516,17 +522,62 @@ def tune_set(
         typer.echo(refusal)
         raise typer.Exit(1)
     set_name = _set_for_title(conn, game)
-    if set_name is None:
+    family = _family_of(conn, set_name) if set_name else _family_held_for(config, game, emulator)
+    if family is None:
         typer.echo(f"Couldn't find {game}.")
         raise typer.Exit(1)
-    set_tuning(conn, DEFAULT_EMULATOR, set_name, device, settings)
+    set_tuning(conn, DEFAULT_EMULATOR, set_name or family, device, settings)
     if emulator is None:
         typer.echo("Saved.")
         return
-    family = _family_of(conn, set_name)
     choose_emulator(conn, family, emulator)
     typer.echo("Saved.")
     _follow_choice(config, conn, family, emulator)
+
+
+def _family_held_for(settings: Settings, game_title: str, emulator: str | None) -> str | None:
+    """The game so titled that only another emulator's set list can make a set of.
+
+    For a game with no MAME 2003-Plus set in the library: the files on hand may still suit the
+    emulator being chosen. It is named by its MAME title, and must have a stand-in there.
+    """
+    if emulator in (None, DEFAULT_EMULATOR):
+        return None
+    dats = load_dats(settings)
+    mame = dats[DEFAULT_EMULATOR]
+    families = families_titled(mame, game_title)
+    return min(standins(mame, dats[emulator], families), default=None)
+
+
+def _awaited_bios(
+    settings: Settings, dats: Mapping[str, Dat], family: str, emulator: str
+) -> list[str]:
+    """The BIOS sets this game's sets on an emulator need and the library does not hold."""
+    if emulator == DEFAULT_EMULATOR or emulator not in dats:
+        return []
+    dat, folder = dats[emulator], emulator_dir(settings.library_dir, emulator)
+    names = standins(dats[DEFAULT_EMULATOR], dat, [family]).get(family, ())
+    waiting = [dat.games[n] for n in names if not bios_ready(dat.games[n], dat, folder)]
+    return sorted({dat.bios_of(g).name for g in waiting})
+
+
+def _bios_note(emulator: str, bios: list[str]) -> str:
+    files = ", ".join(f"{name}.zip" for name in bios)
+    return f"needs a BIOS for {emulator}: put {files} in the drop folder."
+
+
+def _echo_awaited_bios(settings: Settings, conn: sqlite3.Connection, game_title: str) -> None:
+    """After a refusal: if the game so titled is only waiting for a BIOS, say which."""
+    try:
+        dats = load_dats(settings)
+        families = families_titled(dats[DEFAULT_EMULATOR], game_title)
+        chosen = conn.execute("SELECT family, emulator FROM game_emulators").fetchall()
+        for row in (r for r in chosen if r["family"] in families):
+            bios = _awaited_bios(settings, dats, row["family"], row["emulator"])
+            if bios:
+                typer.echo(f"{game_title} {_bios_note(row['emulator'], bios)}")
+    except Exception:
+        return  # the refusal has been said; a note that can't be worked out adds nothing
 
 
 def _build_choices(settings: Settings, conn: sqlite3.Connection) -> None:
@@ -551,14 +602,40 @@ def _on_emulator(conn: sqlite3.Connection, family: str, emulator: str) -> bool:
     return row is not None
 
 
+def _sieve_choices(settings: Settings, conn: sqlite3.Connection) -> None:
+    """A sieve now, for a chosen game whose chips are still in the drop folder."""
+    dats = load_dats(settings)
+    run_sieve(
+        settings,
+        dats,
+        wanted=_wanted(dats, conn),
+        settle_seconds=SETTLE_SECONDS,
+        on_library_changed=lambda: _sync(settings, dats, conn),
+    )
+    _sync_tv(settings, dats, conn)
+
+
+def _not_yet(settings: Settings, family: str, emulator: str) -> str:
+    bios = _awaited_bios(settings, load_dats(settings), family, emulator)
+    if bios:
+        return f"Not on {emulator} yet: it {_bios_note(emulator, bios)}"
+    return f"Not on {emulator} yet: the next sieve builds it once its chips are in."
+
+
 def _follow_choice(
     settings: Settings, conn: sqlite3.Connection, family: str, emulator: str
 ) -> None:
-    """Make the choice real now; if that fails, the sieve timer will."""
+    """Make the choice real now; if that fails, the sieve timer will.
+
+    From the library's own chips first. A game the library has no set of at all has its chips
+    in the drop folder still, so that takes a sieve.
+    """
     try:
         _build_choices(settings, conn)
+        if not _on_emulator(conn, family, emulator):
+            _sieve_choices(settings, conn)
     except Exception:
         typer.echo("The TV will catch up shortly.")
         return
     if not _on_emulator(conn, family, emulator):
-        typer.echo(f"Not on {emulator} yet: the next sieve builds it once its chips are in.")
+        typer.echo(_not_yet(settings, family, emulator))

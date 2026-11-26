@@ -4,8 +4,10 @@ One row per set per emulator, from that emulator's library folder and DAT. The c
 from MAME-only data (the metadata files, and the DAT's players, control and buttons, which
 FBNeo's list lacks) are MAME 2003-Plus's. An FBNeo set stands in for a MAME game: it is
 catalogued under that game's family and borrows its title and those columns from the game's MAME
-row, so a person sees one game whichever emulator runs it. An FBNeo set that shares no ROM with
-any MAME game keeps its own family and leaves those columns empty.
+row, so a person sees one game whichever emulator runs it. When the library holds no MAME set of
+that game (the files on hand suit FBNeo only), they come from MAME's DAT and the metadata files
+instead: the game is still a MAME family, known by the same title and the same controls. An FBNeo
+set that shares no ROM with any MAME game keeps its own family and leaves those columns empty.
 """
 
 import sqlite3
@@ -109,18 +111,40 @@ def _mame_row(conn: sqlite3.Connection, family: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
-def _standing_in(conn: sqlite3.Connection, identity: tuple, family: str | None) -> tuple:
+def _from_the_lists(mame: Dat, meta: Mapping[str, SetMeta], family: str) -> tuple | None:
+    """A MAME game's title and play columns from its DAT and metadata: one not in the library."""
+    game = mame.games.get(family)
+    if game is None:
+        return None
+    return (title(game.description), *_play(game, meta.get(family, SetMeta())))
+
+
+def _borrowed(
+    conn: sqlite3.Connection, mame: Dat, meta: Mapping[str, SetMeta], family: str | None
+) -> tuple | None:
+    """The title and play columns of the MAME game a set stands in for: its library row's, or
+    the lists' when the library has no MAME set of it; None for a set that stands in for nothing."""
+    if family is None:
+        return None
+    row = _mame_row(conn, family)
+    return tuple(row) if row is not None else _from_the_lists(mame, meta, family)
+
+
+def _standing_in(identity: tuple, borrowed: tuple | None) -> tuple:
     """A set's row, with the title and play columns of the MAME game it stands in for, if any."""
-    donor = None if family is None else _mame_row(conn, family)
-    if donor is None:
+    if borrowed is None:
         return identity + NOTHING_BORROWED
     title_at = IDENTITY_COLUMNS.split(", ").index("title")
-    borrowed = identity[:title_at] + (donor["title"],) + identity[title_at + 1 :]
-    return borrowed + tuple(donor[c] for c in BORROWED[1:])
+    return identity[:title_at] + borrowed[:1] + identity[title_at + 1 :] + borrowed[1:]
 
 
 def _sync_other(
-    conn: sqlite3.Connection, folder: Path, dat: Dat, now: str, mame: Dat | None
+    conn: sqlite3.Connection,
+    folder: Path,
+    dat: Dat,
+    now: str,
+    mame: Dat | None,
+    meta: Mapping[str, SetMeta],
 ) -> list[Game]:
     """Each set under the MAME family it stands in for, after the MAME rows are in."""
     games = verified_sets(folder, dat)
@@ -129,7 +153,7 @@ def _sync_other(
     for g in games:
         family = family_of.get(g.name)  # never a BIOS: those stand in for nothing
         identity = _identity(g, dat, folder / f"{g.name}.zip", now, family)
-        rows.append(_standing_in(conn, identity, family))
+        rows.append(_standing_in(identity, _borrowed(conn, mame, meta, family)))
     _insert(conn, f"{IDENTITY_COLUMNS}, {PLAY_COLUMNS}", rows)
     return games
 
@@ -158,7 +182,7 @@ def sync_games(
             if emulator == DEFAULT_EMULATOR:
                 games = _sync_mame(conn, folder, dat, meta, now)
             else:
-                games = _sync_other(conn, folder, dat, now, dats.get(DEFAULT_EMULATOR))
+                games = _sync_other(conn, folder, dat, now, dats.get(DEFAULT_EMULATOR), meta)
             record_arrivals(conn, emulator, {g.name: folder / f"{g.name}.zip" for g in games})
             count += len(games)
     return count

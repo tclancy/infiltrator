@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable
 
 from infiltrator.dat import Dat, Game
+from infiltrator.names import title
 
 Key = tuple[int, str]  # (size, crc)
 
@@ -117,3 +118,11 @@ def fbneo_wanted(mame: Dat, fbneo: Dat, families: Collection[str]) -> frozenset[
         return frozenset()
     found = standins(mame, fbneo, families)
     return with_bios(fbneo, (name for names in found.values() for name in names))
+
+
+def families_titled(mame: Dat, wanted: str) -> frozenset[str]:
+    """The MAME families a person means by this title: any with a set so titled, in any case."""
+    name = wanted.casefold()
+    return frozenset(
+        mame.family(game) for game in _games(mame) if title(game.description).casefold() == name
+    )

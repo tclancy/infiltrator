@@ -134,3 +134,32 @@ def test_only_mame_2003_plus_sets_are_eligible_for_now(conn):
     found = eligible(conn, persona)
     assert [(g["emulator"], g["set_name"]) for g in found] == [(DEFAULT_EMULATOR, "hbarrelw")]
     assert eligible(conn, persona, ignore_drops=True) == found
+
+
+def test_a_game_held_for_another_emulator_only_is_eligible_once_chosen_for_it(tmp_path):
+    from infiltrator.catalogue.emulators import choose_emulator
+    from infiltrator.dat import FBNEO
+
+    conn = connect(tmp_path / "c.db")
+    add_game(conn, "alpha")
+    add_game(conn, "betafb", emulator=FBNEO, family="beta")
+    tom = Persona("tom", language=None)
+    assert [g["set_name"] for g in eligible(conn, tom)] == ["alpha"]
+    choose_emulator(conn, "beta", FBNEO)
+    assert [g["set_name"] for g in eligible(conn, tom)] == ["alpha", "betafb"]
+    add_game(conn, "beta")  # with a MAME set of it, the game is chosen as that again
+    assert [g["set_name"] for g in eligible(conn, tom)] == ["alpha", "beta"]
+
+
+def test_tuning_saved_under_the_mame_name_makes_the_other_emulators_set_playable(tmp_path):
+    from infiltrator.catalogue.emulators import choose_emulator
+    from infiltrator.catalogue.tuning import set_tuning
+    from infiltrator.dat import DEFAULT_EMULATOR, FBNEO
+
+    conn = connect(tmp_path / "c.db")
+    add_game(conn, "betafb", emulator=FBNEO, family="beta", control="dial")
+    choose_emulator(conn, "beta", FBNEO)
+    tom = Persona("tom", language=None)
+    assert eligible(conn, tom) == []
+    set_tuning(conn, DEFAULT_EMULATOR, "beta", "sabrina", "right stick aims")
+    assert [g["set_name"] for g in eligible(conn, tom)] == ["betafb"]

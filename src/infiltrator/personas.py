@@ -63,13 +63,19 @@ def is_must_have(p: Persona, title: str | None) -> bool:
     return title is not None and title.casefold() in wanted
 
 
+def _tuned_as(game: sqlite3.Row) -> str:
+    """The MAME 2003-Plus set a game's tuning is saved under: its own, or for another
+    emulator's set the game it stands in for (tuning is saved by MAME name)."""
+    return game["set_name"] if game["emulator"] == DEFAULT_EMULATOR else game["family"]
+
+
 def _playable(p: Persona, game: sqlite3.Row, tuned: set[str]) -> bool:
     """Controls and the body: no must-have can override these.
 
     A game with saved control tuning counts as playable whatever its listed
     control: Heavy Barrel is a dial in MAME but plays fine with an L1/R1 remap.
     """
-    if game["control"] not in p.controls and game["set_name"] not in tuned:
+    if game["control"] not in p.controls and _tuned_as(game) not in tuned:
         return False
     return not p.one_handed or bool(game["a11y_one_button"])
 
@@ -94,14 +100,25 @@ def _dropped_families(conn: sqlite3.Connection, persona: str) -> set[str]:
     return {r["family"] for r in rows}
 
 
+CHOOSABLE = """
+    SELECT g.* FROM games g WHERE g.is_bios = 0 AND (
+        g.emulator = :mame
+        OR (
+            EXISTS (SELECT 1 FROM game_emulators c
+                    WHERE c.family = g.family AND c.emulator = g.emulator)
+            AND NOT EXISTS (SELECT 1 FROM games m
+                            WHERE m.emulator = :mame AND m.family = g.family AND m.is_bios = 0)
+        )
+    ) ORDER BY g.set_name
+"""
+
+
 def eligible(conn: sqlite3.Connection, p: Persona, ignore_drops: bool = False) -> list[sqlite3.Row]:
-    # MAME 2003-Plus rows only: a game is a MAME family, and is chosen as one. An FBNeo set
-    # stands in for a MAME game once someone chose FBNeo for it (see `shelf.stand_ins`); it is
-    # never chosen in its own right.
-    games = conn.execute(
-        "SELECT * FROM games WHERE is_bios = 0 AND emulator = ? ORDER BY set_name",
-        (DEFAULT_EMULATOR,),
-    ).fetchall()
+    # A game is a MAME family, and is chosen as a MAME 2003-Plus row. An FBNeo set stands in for
+    # a MAME game once someone chose FBNeo for it (see `shelf.stand_ins`). It is chosen in its
+    # own right only when the library has no MAME set of that game: then its row, which carries
+    # the MAME game's title and play columns, is the one the game is chosen as.
+    games = conn.execute(CHOOSABLE, {"mame": DEFAULT_EMULATOR}).fetchall()
     tuned = tuned_sets(conn, DEFAULT_EMULATOR)
     dropped = set() if ignore_drops else _dropped_families(conn, p.name)
     return [
