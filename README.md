@@ -124,7 +124,10 @@ so the first time a platform is missing Infiltrator asks RomM to scan every fold
 
 **The shelf as a RomM collection.** With `romm_collection` set, RomM's folders hold the whole
 library instead: every verified set of each emulator that has folders goes to its games
-folder, and every BIOS set it has to its BIOS folder. The TV sees every game, and the shelf
+folder, and every BIOS set it has to its BIOS folder. A game chosen for another emulator
+(`tune set --emulator`) is listed as that emulator's set only: its MAME 2003-Plus sets stay in
+the library and out of RomM, and RomM marks the records it had for them missing (delete those
+in RomM by hand). The TV sees every game, and the shelf
 of the persona you `play` is the RomM collection of that name: Infiltrator makes it (public)
 the first time, and from then on `play`, `shelf build`, `rotate`, `drop`, `add` and the sieve
 change only what is in it. Pin the collection to Argosy's home screen to see the shelf first.

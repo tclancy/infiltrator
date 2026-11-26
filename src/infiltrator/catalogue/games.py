@@ -164,10 +164,14 @@ def sync_games(
     return count
 
 
-def library_sets(conn: sqlite3.Connection, emulator: str) -> tuple[list[str], list[str]]:
-    """(games, BIOS sets): every verified set of one emulator, as the last sync found them."""
+def library_sets(conn: sqlite3.Connection, emulator: str) -> tuple[list[sqlite3.Row], list[str]]:
+    """(games, BIOS sets): every verified set of one emulator, as the last sync found them.
+
+    Each game is a row with its `set_name` and `family`; the BIOS sets are names.
+    """
     rows = conn.execute(
-        "SELECT set_name, is_bios FROM games WHERE emulator = ? ORDER BY set_name", (emulator,)
+        "SELECT set_name, family, is_bios FROM games WHERE emulator = ? ORDER BY set_name",
+        (emulator,),
     ).fetchall()
-    games = [r["set_name"] for r in rows if not r["is_bios"]]
+    games = [r for r in rows if not r["is_bios"]]
     return games, [r["set_name"] for r in rows if r["is_bios"]]
